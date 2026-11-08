@@ -1,0 +1,3 @@
+[submodule "components/dmd2/DMD2"]
+	path = components/dmd2/DMD2
+	url = https://github.com/freetronics/DMD2.git
