@@ -1,2 +1,2 @@
-idf_component_register(SRCS "padel-scoreboard.cpp" "rx433.c"
+idf_component_register(SRCS "padel-scoreboard.cpp"
                     INCLUDE_DIRS ".")
