@@ -1,0 +1,49 @@
+menu "LED Matrix"
+
+    comment "HUB12 panel GPIO mapping"
+
+    config LED_MATRIX_GPIO_OE
+        int "OE (output enable) GPIO"
+        range 0 48
+        default 44
+        help
+            Output enable pin. Drive it with PWM to set brightness.
+            The default (GPIO44) is also the UART0 RX pin, so UART0 console
+            input is not available when this default is used.
+
+    config LED_MATRIX_OE_ACTIVE_HIGH
+        bool "OE is active high"
+        default y
+        help
+            Set this option when a HIGH level on OE turns the panel on.
+            On the reference board, R1 (1k) pulls OE low, so the panel
+            stays dark at boot.
+            Clear this option for panels where a LOW level on OE turns the
+            panel on.
+
+    config LED_MATRIX_GPIO_A
+        int "A (row select) GPIO"
+        range 0 48
+        default 1
+
+    config LED_MATRIX_GPIO_B
+        int "B (row select) GPIO"
+        range 0 48
+        default 2
+
+    config LED_MATRIX_GPIO_CLK
+        int "CLK (shift clock) GPIO"
+        range 0 48
+        default 4
+
+    config LED_MATRIX_GPIO_LAT
+        int "LAT (latch / strobe) GPIO"
+        range 0 48
+        default 5
+
+    config LED_MATRIX_GPIO_R
+        int "R (data) GPIO"
+        range 0 48
+        default 6
+
+endmenu
