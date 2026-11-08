@@ -1,0 +1,25 @@
+menu "433MHz Receiver"
+
+    config RX433_GPIO
+        int "Receiver DATA GPIO"
+        range 0 48
+        default 11
+        help
+            GPIO connected to the 433 MHz receiver DATA output. The component
+            doesn't read this itself; pass it in rx433_config_t.gpio.
+
+    config RX433_RELEASE_MS
+        int "Release timeout (ms)"
+        range 50 2000
+        default 200
+        help
+            A RELEASE event is sent when no frame of the held code has
+            arrived for this long. Remotes repeat every ~40-50 ms while a
+            button is held.
+
+    config RX433_TASK_PRIORITY
+        int "Decoder task priority"
+        range 1 24
+        default 10
+
+endmenu
