@@ -76,3 +76,14 @@ menu "LED Matrix"
         default 6
 
 endmenu
+
+menu "433MHz Receiver"
+
+    config RX433_GPIO
+        int "Receiver DATA GPIO"
+        range 0 48
+        default 11
+        help
+            GPIO connected to the 433 MHz receiver (RXB60) DATA output.
+
+endmenu

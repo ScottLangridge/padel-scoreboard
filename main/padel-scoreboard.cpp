@@ -1,15 +1,25 @@
-// HUB12 test animation using DMD2.
+// Padel scoreboard: shows "1" or "2" for the two 433 MHz remote buttons.
 //
-// Deliberately low power: at most 4 LEDs are lit at once, and OE runs at
+// Button identities are not stored: the first distinct code received after
+// boot is button 1, the next different code is button 2, anything else is
+// ignored.
+//
+// Deliberately low power: a single 5x7 digit (~10-15 LEDs), and OE runs at
 // CONFIG_LED_MATRIX_BRIGHTNESS (default 50/255).
 
 #include <Arduino.h>
 #include <DMD2.h>
+#include "fonts/SystemFont5x7.h"
 
 #include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "rx433.h"
 #include "sdkconfig.h"
+
+// A held button repeats its frame; frames of the same code closer together
+// than this count as one press.
+static constexpr uint32_t PRESS_GAP_MS = 250;
 
 static const char *TAG = "matrix";
 
@@ -92,18 +102,13 @@ static Esp32SoftDMD dmd(CONFIG_LED_MATRIX_PANELS_WIDE, CONFIG_LED_MATRIX_PANELS_
 
 static void scan_cb(void *) { dmd.scanDisplay(); }
 
-// Position of step `i` on a clockwise walk around the panel border.
-static void perimeter(int i, int w, int h, int &x, int &y)
+static void show_digit(int n)
 {
-    const int len = 2 * (w + h) - 4;
-    i %= len;
-    if (i < w)              { x = i;                 y = 0; return; }
-    i -= w;
-    if (i < h - 1)          { x = w - 1;             y = i + 1; return; }
-    i -= h - 1;
-    if (i < w - 1)          { x = w - 2 - i;         y = h - 1; return; }
-    i -= w - 1;
-    x = 0; y = h - 2 - i;
+    char c = '0' + n;
+    int x = (dmd.width - SYSTEM5x7_WIDTH) / 2;
+    int y = (dmd.height - SYSTEM5x7_HEIGHT) / 2;
+    dmd.clearScreen();
+    dmd.drawChar(x, y, c);
 }
 
 extern "C" void app_main(void)
@@ -111,6 +116,7 @@ extern "C" void app_main(void)
     initArduino();
 
     dmd.setBrightness(CONFIG_LED_MATRIX_BRIGHTNESS);
+    dmd.selectFont(System5x7);
     dmd.beginNoTimer();
 
     esp_timer_create_args_t args = {};
@@ -120,40 +126,45 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(esp_timer_create(&args, &scan_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(scan_timer, CONFIG_LED_MATRIX_ROW_PERIOD_US));
 
-    const int w = dmd.width, h = dmd.height;
-    ESP_LOGI(TAG, "%dx%d display, brightness %d/255, row period %d us",
-             w, h, CONFIG_LED_MATRIX_BRIGHTNESS, CONFIG_LED_MATRIX_ROW_PERIOD_US);
-    ESP_LOGI(TAG, "Animation: 1 px chasing the border, 3 px ball bouncing inside");
+    QueueHandle_t rx_queue;
+    ESP_ERROR_CHECK(rx433_start(CONFIG_RX433_GPIO, &rx_queue));
 
-    // Ball: head + 2-pixel tail, bouncing inside the border.
-    int bx = 3, by = 2, dx = 1, dy = 1;
-    int tail_x[2] = {bx, bx}, tail_y[2] = {by, by};
-    int cx = 0, cy = 0;
-    uint32_t step = 0;
+    ESP_LOGI(TAG, "%dx%d display, brightness %d/255; receiver on GPIO%d",
+             dmd.width, dmd.height, CONFIG_LED_MATRIX_BRIGHTNESS, CONFIG_RX433_GPIO);
+    ESP_LOGI(TAG, "Press a remote button: first code seen = 1, next different code = 2");
+
+    uint32_t buttons[2] = {0, 0}; // 0 = not seen yet
+    uint32_t last_code = 0;
+    TickType_t last_rx = 0;
+    rx433_frame_t f;
 
     while (true) {
-        // Erase last frame's pixels (only the ones we lit).
-        dmd.setPixel(cx, cy, GRAPHICS_OFF);
-        dmd.setPixel(tail_x[1], tail_y[1], GRAPHICS_OFF);
-
-        perimeter(step, w, h, cx, cy);
-
-        tail_x[1] = tail_x[0]; tail_y[1] = tail_y[0];
-        tail_x[0] = bx;        tail_y[0] = by;
-        if (bx + dx < 1 || bx + dx > w - 2) dx = -dx;
-        if (by + dy < 1 || by + dy > h - 2) dy = -dy;
-        bx += dx; by += dy;
-
-        dmd.setPixel(cx, cy, GRAPHICS_ON);
-        dmd.setPixel(bx, by, GRAPHICS_ON);
-        dmd.setPixel(tail_x[0], tail_y[0], GRAPHICS_ON);
-        dmd.setPixel(tail_x[1], tail_y[1], GRAPHICS_ON);
-
-        if (step % 20 == 0) {
-            ESP_LOGI(TAG, "step %lu: border px (%d,%d), ball (%d,%d)",
-                     (unsigned long)step, cx, cy, bx, by);
+        if (!xQueueReceive(rx_queue, &f, portMAX_DELAY)) {
+            continue;
         }
-        step++;
-        delay(50);
+
+        TickType_t now = xTaskGetTickCount();
+        bool new_press = f.code != last_code || now - last_rx > pdMS_TO_TICKS(PRESS_GAP_MS);
+        last_code = f.code;
+        last_rx = now;
+        if (!new_press) {
+            continue;
+        }
+
+        if (!buttons[0]) {
+            buttons[0] = f.code;
+            ESP_LOGI(TAG, "code 0x%06lx assigned to button 1", (unsigned long)f.code);
+        } else if (!buttons[1] && f.code != buttons[0]) {
+            buttons[1] = f.code;
+            ESP_LOGI(TAG, "code 0x%06lx assigned to button 2", (unsigned long)f.code);
+        }
+
+        int n = f.code == buttons[0] ? 1 : f.code == buttons[1] ? 2 : 0;
+        ESP_LOGI(TAG, "code=0x%06lx bits=%u proto=%u pulse=%uus -> %s",
+                 (unsigned long)f.code, f.bits, f.protocol, f.pulse_us,
+                 n == 1 ? "button 1" : n == 2 ? "button 2" : "unknown, ignored");
+        if (n) {
+            show_digit(n);
+        }
     }
 }
