@@ -11,3 +11,7 @@ managed_components/
 
 # clangd index
 .cache/
+
+# Host test binaries
+test/render_clips
+test/score_test

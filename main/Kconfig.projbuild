@@ -1,0 +1,62 @@
+menu "LED Matrix"
+
+    config LED_MATRIX_BRIGHTNESS
+        int "Brightness (0-255)"
+        range 1 255
+        default 25
+        help
+            PWM duty on OE. Keep it low when running from USB power.
+
+    config LED_MATRIX_ROW_PERIOD_US
+        int "Row scan period (us)"
+        range 250 5000
+        default 1000
+        help
+            Time each of the 4 scan rows is shown. A full frame is 4x this.
+
+    config LED_MATRIX_GPIO_OE
+        int "OE GPIO (active high)"
+        range 0 48
+        default 44
+
+    config LED_MATRIX_GPIO_A
+        int "A GPIO"
+        range 0 48
+        default 1
+
+    config LED_MATRIX_GPIO_B
+        int "B GPIO"
+        range 0 48
+        default 2
+
+    config LED_MATRIX_GPIO_CLK
+        int "CLK GPIO"
+        range 0 48
+        default 4
+
+    config LED_MATRIX_GPIO_LAT
+        int "LAT / SCLK GPIO"
+        range 0 48
+        default 5
+
+    config LED_MATRIX_GPIO_R
+        int "R / DATA GPIO"
+        range 0 48
+        default 6
+
+endmenu
+
+menu "Scoreboard"
+
+    config SCOREBOARD_FLIP_SERVE_BOXES
+        bool "Top of the panel is the left team's right-hand service box"
+        default n
+        help
+            The serve triangle points to the service box the serve comes from,
+            and a game's first serve is from the server's right-hand box. By
+            default the top of the panel stands for the right-hand box of the
+            team on the right (so the left team's first serve points down).
+            Enable this if the panel is mounted on the other side of the
+            court, where it's the other way round.
+
+endmenu

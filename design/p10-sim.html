@@ -1,0 +1,833 @@
+<title>P10 Matrix Simulator</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: one centred panel on a dark bench, single dark look by design */
+  :root {
+    --bench: #121110;
+    --pcb: #050505;
+    --frame: #1d1c1a;
+    --led-on: #ffc61a;
+    --led-off: #2a2410;
+    --label: #8a8270;
+    --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bench);
+    color: var(--label);
+    font-family: var(--font-mono);
+    display: grid;
+    place-items: center;
+    padding-block: 24px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    box-sizing: border-box;
+  }
+  .rig { width: 100%; max-width: 1100px; display: grid; gap: 10px; }
+  .module {
+    background: var(--frame);
+    padding: clamp(6px, 1.2vw, 14px);
+    border-radius: 4px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6), inset 0 0 0 1px rgba(255,255,255,.04);
+  }
+  canvas { display: block; width: 100%; aspect-ratio: 2 / 1; max-width: 100%; background: var(--pcb); }
+  .clips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .clips button {
+    font: inherit; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--label); background: transparent; border: 1px solid rgba(255,255,255,.1);
+    border-radius: 3px; padding: 6px 10px; cursor: pointer;
+  }
+  .clips button:hover { border-color: rgba(255,255,255,.3); color: #ddd; }
+  .clips button[aria-pressed="true"] { color: var(--led-on); border-color: var(--led-on); }
+  .clips button:focus-visible { outline: 2px solid var(--led-on); outline-offset: 2px; }
+  .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="rig">
+  <div class="module"><canvas id="panel" width="1600" height="800"></canvas></div>
+  <div class="meta"><span>P10 · 32 × 16 · Yellow</span><span id="stat">Frame 0</span></div>
+  <nav class="clips" id="clips" aria-label="Animation clips"></nav>
+</div>
+
+<script>
+/* =====================================================================
+   ANIMATION — edit this section.
+   animate(f, t) is called every frame.
+     f = frame number, t = seconds since start
+   Drawing helpers (x 0..31 left→right, y 0..15 top→bottom, v 0..1):
+     clear()            all LEDs off
+     set(x, y, v=1)     one LED
+     get(x, y)
+     line(x0,y0,x1,y1,v=1)
+     rect(x,y,w,h,v=1,fill=false)
+     text(str, x, y, v=1)   5x7 font, returns pixel width
+     textWidth(str)
+   ===================================================================== */
+const FPS = 30;
+
+/* Padel splash: court builds, serve, server takes the net, return,
+   volley, lob forces the net player back, jumping smash from the back
+   that bounces out over the glass, court slides away as PADEL drops in,
+   ball bounces along, wipe, loop. */
+const LOOP = 10.8;                 // seconds per cycle
+const SLIDE = 5.9;                 // rally ends, title sequence starts
+let oy = 0, jy = 0;                // scene offset (slide-out), jump height
+const S = (x, y) => set(Math.round(x), Math.round(y) + oy - jy);
+const lerp = (a, b, s) => a + (b - a) * s;
+const ease = s => 1 - Math.pow(1 - s, 3);
+const easeBack = s => { const c = 1.7; return 1 + (c + 1) * Math.pow(s - 1, 3) + c * Math.pow(s - 1, 2); };
+function track(keys, t) {
+  if (t <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++) {
+    if (t <= keys[i][0]) { const [t0, v0] = keys[i-1], [t1, v1] = keys[i]; return lerp(v0, v1, (t - t0) / (t1 - t0)); }
+  }
+  return keys[keys.length - 1][1];
+}
+
+// Player centre-column keyframes [time, x]
+const L_X = [[0,3],[1.4,3],[2.3,10],[3.7,10],[4.45,4],[6.5,4]];        // serves, takes net, forced back
+const R_X = [[0,27],[3.7,27],[4.6,24],[4.95,24],[5.5,28],[6.5,28]];    // returns, lobs, moves in, chases smash
+// When each player strikes the ball
+const CONTACTS = [
+  { t: 1.3, side: 0, kind: "low"   },  // L underarm serve
+  { t: 2.2, side: 1, kind: "drive" },  // R return
+  { t: 2.8, side: 0, kind: "drive" },  // L volley at the net
+  { t: 3.6, side: 1, kind: "low"   },  // R lobs over the net player
+  { t: 4.8, side: 0, kind: "smash" },  // L jumping smash from the back
+];
+// Ball flight arcs [t0, t1, from, to, arc height]
+const ARCS = [
+  [0.9, 1.1,  [7,8],   [7,14],  0],    // ball dropped for the serve
+  [1.1, 1.3,  [7,14],  [7,12],  1],
+  [1.3, 1.85, [7,12],  [21,14], 7],    // serve
+  [1.85,2.2,  [21,14], [23,7],  3],
+  [2.2, 2.8,  [23,7],  [14,7],  2],    // return, volleyed
+  [2.8, 3.2,  [14,7],  [19,14], 3],    // volley
+  [3.2, 3.6,  [19,14], [23,12], 3],    // bounce up into the lob
+  [3.6, 4.8,  [23,12], [6,1],   11],   // lob over the net player, off the top
+  [4.8, 5.0,  [6,1],   [20,14], 0],    // smash
+  [5.0, 5.5,  [20,14], [33,-3], 5],    // out over the back glass
+];
+const SMASH_ARC = 8, SMASH_BOUNCE = 5.0, SMASH_T = 4.8, BX = 20;
+
+// Racket arm poses, relative to shoulder (px, 9), x mirrored by facing dir
+const POSE = {
+  ready:     [[1,0],[2,0],[3,-1],[4,-1],[3,-2],[4,-2]],
+  back:      [[-1,0],[-2,0],[-3,-1],[-4,-1],[-3,-2],[-4,-2]],
+  hit:       [[1,0],[2,-1],[3,-2],[4,-2],[5,-2],[4,-3],[5,-3]],
+  lowBack:   [[-1,1],[-2,2],[-3,3],[-4,3],[-3,4],[-4,4]],
+  low:       [[1,1],[2,2],[3,3],[4,3],[3,4],[4,4]],
+  smashBack: [[-1,-1],[-1,-2],[-2,-3],[-2,-4],[-3,-4],[-2,-5],[-3,-5]],
+  smashHit:  [[1,-1],[1,-2],[2,-3],[2,-4],[3,-4],[2,-5],[3,-5]],
+};
+function poseFor(side, t) {
+  for (const c of CONTACTS) {
+    if (c.side !== side) continue;
+    const d = t - c.t;
+    if (c.kind === "smash") {
+      if (d >= -0.4 && d < 0) return "smashBack";
+      if (d >= 0 && d < 0.08) return "smashHit";
+      if (d >= 0.08 && d < 0.3) return "low";          // follow-through down
+    } else {
+      if (d >= -0.25 && d < 0) return c.kind === "low" ? "lowBack" : "back";
+      if (d >= 0 && d < 0.2) return c.kind === "low" ? "low" : "hit";
+    }
+  }
+  return "ready";
+}
+function player(px, d, pose, legs) {
+  [[0,-1],[-1,0],[0,0],[1,0],[0,1]].forEach(([x,y]) => S(px + x, 6 + y));   // head
+  for (let y = 8; y <= 11; y++) S(px, y);                                     // body
+  if (legs === "air") { S(px-1,12); S(px+1,12); S(px-2,13); S(px+2,13); }    // tucked jump
+  else { S(px-1,12); S(px-1,13); S(px-legs,14); S(px+1,12); S(px+1,13); S(px+legs,14); }
+  if (pose.startsWith("smash")) { S(px + d, 8); S(px + 2*d, 7); }            // tracking arm points up
+  else if (!pose.toLowerCase().includes("back")) { S(px - d, 9); S(px - 2*d, 10); }
+  POSE[pose].forEach(([x,y]) => S(px + x*d, 9 + y));                          // racket arm
+}
+function legsFor(keys, t) {
+  if (jy > 0) return "air";
+  const v = Math.abs(track(keys, t + 0.04) - track(keys, t - 0.04));
+  if (v > 0.05) return Math.floor(t / 0.09) % 2 ? 2 : 0;    // running stride
+  return Math.floor(t / 0.25) % 2 ? 2 : 1;                 // split-step
+}
+function court(p) {          // p: 0..1 build progress
+  const w = Math.min(1, p / 0.6) * 16;
+  for (let x = 0; x < 32; x++) if (Math.abs(x - 15.5) < w) S(x, 15);
+  const nh = Math.max(0, Math.min(4, Math.round((p - 0.4) / 0.4 * 4)));
+  for (let i = 0; i < nh; i++) {
+    const y = 14 - i;
+    if (i === 3) { S(15, y); S(16, y); }          // net tape
+    else S((y % 2) ? 15 : 16, y);                 // mesh
+  }
+  const wh = Math.max(0, Math.min(5, Math.round((p - 0.5) / 0.4 * 5)));
+  for (let i = 0; i < wh; i++) { S(0, 14 - i); S(31, 14 - i); }  // back glass
+}
+function ballAt(i, u) {
+  const [, , a, b, h] = ARCS[i];
+  return [lerp(a[0], b[0], u), lerp(a[1], b[1], u) - h * 4 * u * (1 - u)];
+}
+function scene(t) {
+  court(t);
+  if (t >= 0.8) {
+    const d = (t - SMASH_T) / 0.3;
+    jy = Math.abs(d) < 1 ? Math.round(3 * (1 - d * d)) : 0;
+    player(Math.round(track(L_X, t)), 1, poseFor(0, t), legsFor(L_X, t));
+    jy = 0;
+    player(Math.round(track(R_X, t)), -1, poseFor(1, t), legsFor(R_X, t));
+  }
+  for (let i = 0; i < ARCS.length; i++) {
+    const [t0, t1] = ARCS[i];
+    if (t < t0 || t >= t1) continue;
+    const u = (t - t0) / (t1 - t0);
+    const [x, y] = ballAt(i, u);
+    S(x, y);
+    if (i === SMASH_ARC) { const [px, py] = ballAt(i, Math.max(0, u - 0.25)); S(px, py); }  // speed trail
+  }
+  if (t >= SMASH_BOUNCE && t < SMASH_BOUNCE + 0.12) {   // impact burst
+    S(BX,11); S(BX-2,13); S(BX+2,13); S(BX-3,14); S(BX+3,14);
+  }
+}
+
+/* Splash: a ball drops in, bounces and settles; the court grows out of where it
+   lands; then the walk-in and rally play frame for frame from the board export.
+   At the end the scene dissolves away leaving the floor, which rises to become
+   the dividing line of the Bind screen, and that screen wipes in around it. */
+const RALLY_FRAMES = [
+  [80,"00000000000000008000000180000001800000018010080180381c018013c8018013c801803c3c0180500a0180118801802894018029140180108801ffffffff"],
+  [80,"00000000000000008000000180000001800000018020040180700e01802664018026640180781e0180a005018021840180508a0180510a0180889101ffffffff"],
+  [80,"00000000000000008000000180000001800000018040020180e00701804c3201804c320180f00f01814002818041820180a0850180a1050180408201ffffffff"],
+  [80,"00000000000000008000000180000001800000018080010181c00381809819018098190181e007818280014180818101814082818141028182208441ffffffff"],
+  [80,"000000000000000080000001800000018000000181000081838001c181300c8181300c8183c003c1850000a181018081828081418281014181008081ffffffff"],
+  [40,"000000000000000080000001800000018000000182000081870001c182600c8182600c81878003c18a0000a182018081850081418501014188808221ffffffff"],
+  [40,"000000000000000080000001800000018000000182000041870000e18260064182600641878001e18a00005182018041850080a1850100a188808111ffffffff"],
+  [40,"0000000000000000800000018000000180000001840000418e0000e184c0064184c006418f0001e194000051840180418a0080a18a0100a184008041ffffffff"],
+  [40,"0000000000000000800000018000000180000001840000218e00007184c0032184c003218f0000f194000029840180218a0080518a01005184008021ffffffff"],
+  [40,"0000000000000000800000018000000180000001880000219c00007189800321898003219e0000f1a8000029880180219400805194010051a2008089ffffffff"],
+  [40,"0000000000000000800000018000000180000001880000119c00003989800191898001919e000079a8000015880180119400802994010029a2008045ffffffff"],
+  [140,"000000000000000080000001800000018000000190000011b80000399300019193000191bc000079d000001590018011a8008029a8010029c4008045ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b80000399300019193000191bd000079d000001590018011a8008029a8010029c4008045ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b80000399300019193000191bc000079d100001590018011a8008029a8010029c4008045ffffffff"],
+  [40,"000000000000000080000001800000018000000190000011b80000399300019193000191bc000079d000001591018011a8008029a8010029a8008029ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b80000399300019193000191bc000079d000001590018011a9008029a8010029a8008029ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b8000039900001919000019190000079b0000015d0018011a8008029a9010029a8008029ffffffff"],
+  [40,"000000000000000080000001800000018000000190000011b8000039900001919000019190000079b0000015d0018011a8008029a8010029a9008029ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b8000039900001919000019190000079b0000015d0018011a8008029a9010029a8008029ffffffff"],
+  [100,"000000000000000080000001800000018000000190000011b8000039900001919000019190000079b0000015d0018011a9008029a8010029a8008029ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b8000039900001919000019190000079b0000015d0018011a9008029a8010029c4008045ffffffff"],
+  [40,"000000000000000080000001800000018000000190000011b80000399000019190000191b0000079d800001594018011ab008029ab010029c4008045ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b80000399000019190000191b0000079d800001594818011ab008029ab010029c4008045ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b80000399000019190000191b0400079d800001594018011ab008029ab010029c4008045ffffffff"],
+  [40,"000000000000000080000001800000018000000190000011b80000399000019190200191b0000079d800001594018011ab008029ab010029c4008045ffffffff"],
+  [30,"000000000000000080000001800000018000000190000011b80000399020019190000191b0000079d800001594018011ab008029ab010029c4008045ffffffff"],
+  [30,"0000000000000000800000018000000180000001880000119c000039881001918800019198000079ac0000158a018011958080299581002988008045ffffffff"],
+  [40,"0000000000000000800000018000000180000001880000119c080039880001918800019198000079ac0000158a018011958080299581002988008029ffffffff"],
+  [30,"0000000000000000800000018000000180000001880000119c04003989800191898001919e000079a8000015880180119400802994010029a2008029ffffffff"],
+  [30,"0000000000000000800000018000000180000001880000119c02003989800191898001919e000079a8000015880180119400802994010029a2008029ffffffff"],
+  [40,"0000000000000000800000018000000180000001840000118e01003984c0019184c001918f00007994000015840180118a0080298a01002991008029ffffffff"],
+  [30,"0000000000000000800000018000000180000001840000118e00003984c1019184c001918f00007994000015840180118a0080298a01002984008029ffffffff"],
+  [30,"0000000000000000800000018000000180000001840000118e00003984c0819184c001918f00007994000015840180118a0080298a01002984008029ffffffff"],
+  [40,"0000000000000000800000018000000180000001840000118e00003984c0019184c041918f00007994000015840180118a0080298a01002984008029ffffffff"],
+  [30,"000000000000000080000001800000018000000182000011870000398260019182600191878020798a00001582018011850080298501002988808029ffffffff"],
+  [30,"000000000000000080000001800000018000000182000011870000398260019182600191878000798a00101582018011850080298501002988808045ffffffff"],
+  [40,"000000000000000080000001800000018000000182000011870000398260019182600191878000798a00001582018011850088298501002982008045ffffffff"],
+  [30,"000000000000000080000001800000018000000182000011870000398260019182600191878000798a00001582018011850080298501042982008045ffffffff"],
+  [30,"00000000000000008000000180000001800000018100001183800039813001918130019183c000798500001581018011828080298281042981008045ffffffff"],
+  [40,"00000000000000008000000180000001800000018100001183800039813001918130019183c000798500001581018011828084298281002984408045ffffffff"],
+  [30,"00000000000000008000000180000001800000018100001183800039813001918130019183c000798500041581018011828080298281002984408045ffffffff"],
+  [30,"00000000000000008000000180000001800000018100001183800039813000138130001383c0021d8500001181018011828080298281002984408045ffffffff"],
+  [40,"00000000000000008000000180000001800000018080001181c00039809800138098021381e0001d8280001180818011814080298141002980808029ffffffff"],
+  [60,"00000000000000008000000180000001800000018080001181c00039809802138098001381e0001d8280001180818011814080298141002980808029ffffffff"],
+  [40,"00000000000000008000000180000001800000018080001181c00039809802138098001381e0001d8280001180818011814080298141002982208029ffffffff"],
+  [30,"00000000000000008000000180000001800000018040001180e00139804c0013804c001380f0001d814000118041801180a0802980a1002981108029ffffffff"],
+  [30,"00000000000000008000000180000001800000018040001180e00039804c0113804c001380f0001d814000118041801180a0802980a1002980408029ffffffff"],
+  [70,"00000000000000008000000180000001800000018040001180e00339804c0391804c005180f00039814000158041801180a0802980a1002980408029ffffffff"],
+  [70,"0000000000000000800000018000000180000001802000118070033980260391802600518078003980a0001580218011805080298051002980888045ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070073980260391802600518078003980a0001580218011805080298051002980888045ffffffff"],
+  [30,"0000000000000000800000018000000180000001802004118070033980260391802600518078003980a0001580218011805080298051002980888045ffffffff"],
+  [40,"0000000000000000800000018000000180000001802008118070033980260391802600518078003980a0001580218011805080298051002980888045ffffffff"],
+  [30,"0000000000000000800000018000000180000001802008118070003980260191802601918078007980a0001580218011805080298051002980888045ffffffff"],
+  [30,"0000000000000000800000018000000180000001802010118070003980260191802601918078007980a0001580218011805080298051002980888045ffffffff"],
+  [40,"0000000000000000800000018000000180000001802010118070003980260191802601918078007980a0001580218011805080298051002980508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802020118070003980260191802601918078007980a0001580218011805080298051002980508029ffffffff"],
+  [100,"00000000000000008000000180000001800000018020401180700039832001918320019180e000798020001580218011805080298051002980508029ffffffff"],
+  [30,"00000000000000008000000180000001800000018020001180708039832001918320019180e000798020001580218011805080298051002980508029ffffffff"],
+  [70,"00000000000000008000000180000001800000018020001180710039832001918320019180e000798020001580218011805080298051002980508029ffffffff"],
+  [30,"00000000000000008000000180000001800000018020001180700039832201918320019180e000798020001580218011805080298051002980888045ffffffff"],
+  [140,"0000000000000000800000018000000180000001802000118073003980270191802801918070007980a0001580218011805080298051002980888045ffffffff"],
+  [60,"0000000000000000800000018000000180000001802000118073003980278191802801918070007980a0001580218011805080298051002980888045ffffffff"],
+  [70,"0000000000000000800000018000000180000001802000118070003980260191802641918078007980a0001580218011805080298051002980508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260191802601918078407980a0001580218011805080298051002980508029ffffffff"],
+  [40,"0000000000000000800000018000000180000001802000118070003980260191802601918078007980a0201580218011805080298051002980508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260191802601918078007980a000158021a011805080298051002980508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260191802601918078007980a0001580218011805090298051002980508029ffffffff"],
+  [40,"0000000000000000800000018000000180000001802000118070003980260191802601918078007980a0001580218011805080298051002980509029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260191802601918078007980a0001580218011805080298051102980508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260191802601918078007980a0001580218011805088298051002980888045ffffffff"],
+  [70,"0000000000000000800000018000000180000001802000118070003980260191802601918078007980a0001580218811805080298051002980888045ffffffff"],
+  [100,"0000000000000000800000018000000180000001802000118070003980260011802600118078001180a00419802180158050802b8051002b80888045ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260011802600118078001180a00219802180158050802b8051002b80888045ffffffff"],
+  [40,"0000000000000000800000018000000180000001802000118070003980260011802600118078001180a00219802180158050802b8051002b80508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260011802600118078001180a00019802182158050802b8051002b80508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260011802600118078001180a00019802181158050802b8051002b80508029ffffffff"],
+  [40,"0000000000000000800000018000000180000001802000118070003980260011802600118078001980a0003580218051805081a9805101a980508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260011802600118078001980a0003580218151805081a9805101a980508029ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070003980260011802600118078021980a0003580218051805081a9805101a980208029ffffffff"],
+  [40,"0000000000000000800000018000000180000001802000118070003980260011802602118078001980a0003580218051805081a9805101a980888045ffffffff"],
+  [30,"0000000000000000800000018000000180000001802000118070043980260011802600118078001980a0003580218051805081a9805101a980888045ffffffff"],
+  [30,"00000000000000008000000180000001800000018040041180e00039804c0011804c001180f00019814000358041805180a081a980a101a981108045ffffffff"],
+  [40,"00000000000000008000000180000001800008018040001180e00039804c0011804c001180f00019814000358041805180a081a980a101a980408011ffffffff"],
+  [30,"00000000000000008000000180000801800000018040001180e00039804c0191804c019180f00079814000158041801180a0802980a1002980408011ffffffff"],
+  [30,"00000000000000008000100180000001800000018040002180e00071804c0321804c032180f000f1814000298041802180a0805180a1005180408021ffffffff"],
+  [40,"00000000000010008000000180000001800000018080002181c00071809803218098032181e000f18280002980818021814080518141005182208089ffffffff"],
+  [30,"00002000000000008000000180000001800000018080002181c00071809803218098032181e000f18280002980818021814080518141005182208089ffffffff"],
+  [70,"00000000000000008000000180000001800000018080002181c00071809803218098032181e000f18280002980818021814080518141005180808021ffffffff"],
+  [30,"00000000000000008000000180000001800000018100002183800071813003218130032183c000f18500002981018021828080518281005181008021ffffffff"],
+  [100,"00000000000000008000000180000001800000018100002183800071813003218130032183c000f18500002981018021828080518281005184408089ffffffff"],
+  [70,"000000000000000080000001800000018000000182000041870000e18260064182600641878001e18a00005182018041850080a1850100a182008041ffffffff"],
+  [30,"000000000000000080000001800000018000000182000041870000e18260064182600641878001e18a00005182018041850080a1850100a188808111ffffffff"],
+  [70,"0000000000000000800000018000000180000001840000418e0000e184c0064184c006418f0001e194000051840180418a0080a18a0100a191008111ffffffff"],
+  [60,"0000000000000000800000018000000180000001840000418e0000e184c0064184c006418f0001e194000051840180418a0080a18a0100a184008041ffffffff"],
+  [40,"00000000000000008000000180000001e0000001e8000041bc0000e19a0006419c000641880001e18800005188018041940080a1940100a188008041ffffffff"],
+  [30,"00000000000000008000000180000001e0000001e8000041bc0000e19a0006419c000641880001e18800005188018041940080a1940100a1a2008111ffffffff"],
+  [30,"00000000000000008000000180000001e0000001e8000081bc0001c19a000c819c000c81880003c1880000a1880180819400814194010141a2008221ffffffff"],
+  [40,"00000000000000008000000180000001e0000001e8000081bc0001c19a000c819c000c81880003c1880000a188018081940081419401014194008081ffffffff"],
+  [60,"000000000000000080000001e0000001e8000001bc0000819a0001c19c000c8188000c81880003c1880000a194018081a20081418001014180008081ffffffff"],
+  [40,"0000000000000000e0000001e8000001bc0000019a0000819c0001c188000c8188000c81880003c1940000a1a2018081800081418001014180008221ffffffff"],
+  [60,"0000000000000000e0000001e8000001bc0000019a0000819c0001c188000c8188000c81880003c1940000a1a2018081800081418001014180008141ffffffff"],
+  [70,"0000000060000000e8000001bc0000019a0000019c000081880001c188000c8188000c81940003c1a20000a180018081800081418001014180008141ffffffff"],
+  [30,"0200000060000000e8000001bc0000019a0000019c000081880001c188000c8188000c81940003c1a20000a180018081800081418001014180008221ffffffff"],
+  [40,"00000000030000008b0000019e0000018e0000018c000081880001c188000c8188000c81940003c1a20000a180018081800081418001014180008221ffffffff"],
+  [30,"00000000030000008b0000019e8000018e0000018c000081880001c188000c8188000c81940003c1a20000a180018081800081418001014180008221ffffffff"],
+  [30,"00000000030000008b0000019e0000018e0000018c100081880001c188000c8188000c81940003c1a20000a180018081800081418001014180008221ffffffff"],
+  [40,"0000000000000000880000019c0000018820000188000081980001c1ac000c818a040c81958003c1a38000a180018081800081418001014180008221ffffffff"],
+  [30,"000000000000000080000001880000019c00000188000081880801c198000c81ac000c818a0003c1958100a1a3818081800081418001014180008081ffffffff"],
+  [30,"000000000000000080000001880000019c00000188000081880001c198000c81ac000c818a0203c1958000a1a38180818000a1418001014180008221ffffffff"],
+  [40,"000000000000000080000001880000019c00000188000081880001c198000c81ac000c818a0003c1958000a1a381888180008141800123418000cb21ffffffff"],
+  [30,"00000000000000008000000180000001880000019c000041880000e18800064198000641ac0001e18a00005195818841a38084a1800122a18000c111ffffffff"],
+  [30,"00000000000000008000000180000001880000019c000041880000e18800064198000641ac0003e18a00005195818841a38080a1800122a18000c141ffffffff"],
+  [40,"0000000000000000800000018000000180000001880000419c0000e18800074188000641980001e1ac0000518a018841958080a1958122a19400c141ffffffff"],
+  [30,"0000000000000000800000018000000180000001880000419c0001e189800641898006419e0001e1a800005188018041940080a1940100a194008111ffffffff"],
+  [30,"0000000000000000800000018000000180000081880000219c00007189800321898003219e0000f1a800002988018021940080519401005194008089ffffffff"],
+  [40,"0000000000000000800000418000000180000001880000219c00007189800321898003219e0000f1a800002988018021940080519401005194008089ffffffff"],
+  [30,"0000000000000020800000018000000180000001880000219c00007189800321898003219e0000f1a800002988018021940080519401005194008021ffffffff"],
+  [30,"0000001000000000800000018000000180000001880000219c00007189800321898003219e0000f1a8000029880180219400805194010051a2008021ffffffff"],
+  [40,"0000000000000000800000018000000180000001880000119c00003989800191898001919e000079a8000015880180119400802994010029a2008011ffffffff"],
+  [60,"0000000000000000800000018000000180000001880000119c00003989800191898001919e000079a8000015880180119400802994010029a2008045ffffffff"],
+  [40,"0000000000000000800000018000000180000001880000119c00003989800191898001919e000079a8000015880180119400802994010029a2008011ffffffff"],
+  [60,"0000000000000000800000018000000180000001880000099c00001d898000c9898000c99e00003da800000b880180099400801594010015a2008009ffffffff"],
+  [40,"0000000000000000800000018000000180000001880000099c00001d898000c9898000c99e00003da800000b88018009940080159401001594008023ffffffff"],
+  [230,"0000000000000000800000018000000180000001880000099c00001d898000c9898000c99e00003da800000b88018009940080159401001594008015ffffffff"],
+  [170,"0000000000000000800000018000000180000001880000099c00001d898000c9898000c99e00003da800000b880180099400801594010015a2008023ffffffff"]
+];  // [ms, 512 bits as hex] — walk-in and rally from the board export (glass raised 3 rows), up to the end of the point. 5780 ms
+const RALLY_MS = RALLY_FRAMES.reduce((a, f) => a + f[0], 0);
+function drawFrame(FR, ms) {                         // paint the frame at ms (clamped) into buf
+  let i = 0; ms = Math.max(0, ms);
+  while (i < FR.length - 1 && ms >= FR[i][0]) ms -= FR[i++][0];
+  const hex = FR[i][1];
+  for (let k = 0; k < 128; k++) { const n = parseInt(hex[k], 16); for (let b = 0; b < 4; b++) if (n >> (3 - b) & 1) buf[k * 4 + b] = 1; }
+}
+// Ball height over time: drop, three diminishing bounces, settle on the floor row (15)
+const BOUNCE = [[0, -1, 15, 0.36], [0.36, 15, 15, 0.5, 10], [0.86, 15, 15, 0.32, 13], [1.18, 15, 15, 0.2, 14.2]];
+function ballY(t) {
+  if (t < 0.36) { const u = t / 0.36; return -1 + 16 * u * u; }
+  for (let i = 1; i < BOUNCE.length; i++) { const [t0, , , d, peak] = BOUNCE[i]; if (t < t0 + d) { const u = (t - t0) / d; return 15 - (15 - peak) * 4 * u * (1 - u); } }
+  return 15;
+}
+function courtGrow(p) {                              // 0..1: floor out from the ball, net up from it, glass up at the ends
+  const w = Math.round(ez(p, 0, 0.5) * 16);
+  for (let x = 16 - w; x < 16 + w; x++) set(x, 15);
+  const nh = Math.round(ez(p, 0.1, 0.5) * 4);
+  for (let i = 0; i < nh; i++) { const y = 14 - i; if (i === 3) { set(15, y); set(16, y); } else set(y % 2 ? 15 : 16, y); }
+  const gh = Math.round(ez(p, 0.45, 1) * 13);
+  for (let i = 0; i < gh; i++) { set(0, 14 - i); set(31, 14 - i); }
+}
+const SP = { DROP: 0, COURT: 1.8, RALLY: 2.5, OFF: 2.5 + RALLY_MS / 1000, ON: 0 };
+SP.ON = SP.OFF + 0.95;                               // dissolve 0.45s, floor rises 0.4s, then the Bind screen
+function splash(lt) {
+  if (lt < SP.COURT) { set(16, Math.round(ballY(lt)), 1); return; }
+  if (lt < SP.RALLY) { courtGrow(clampT(lt, SP.COURT, SP.RALLY - 0.1)); return; }
+  if (lt < SP.OFF) { drawFrame(RALLY_FRAMES, (lt - SP.RALLY) * 1000); return; }
+  if (lt < SP.ON) {                                  // scene dissolves, the floor rises to row 8
+    const d = lt - SP.OFF;
+    if (d < 0.45) {
+      drawFrame(RALLY_FRAMES, RALLY_MS - 1);
+      const k = Math.round(ease(d / 0.45) * 512); for (let i = 0; i < k; i++) if (perm[i] < 15 * 32) buf[perm[i]] = 0;
+    } else { const y = 15 - Math.round(ease((d - 0.45) / 0.4) * 7); for (let x = 0; x < 32; x++) set(x, y); }
+    return;
+  }
+  const d = lt - SP.ON;                              // Bind screen wipes in from the line outward
+  CLIPS[1].fn(d);
+  const h = Math.round(ease(Math.min(1, d / 0.35)) * 8);
+  for (let y = 0; y < 16; y++) if (y !== 8 && Math.abs(y - 8) > h) for (let x = 0; x < 32; x++) set(x, y, 0);
+}
+
+/* =====================================================================
+   SCOREBOARD CLIPS
+   Scott's layout: points as "40-15" in 5x7 across the top (rows 0-6),
+   a full-width line on row 8, and a bottom band (rows 10-14) with
+   set tally dashes and the games digit on each side of the serve
+   indicator: a 4x4 triangle whose right angle faces the corner the
+   serve comes from, nudged a column and a row that way. Sets are a
+   post at each edge with two cells against the edge that fill up. The winning
+   ball runs along row 7, riding the line with a shadow in it.
+   ===================================================================== */
+const PTS = ["0", "15", "30", "40"];
+const L_EDGE = 13, R_EDGE = 19;                     // points columns (left is exclusive)
+const GL = 6, GR = 23, GY = 10;                     // games digit origins
+const lx = s => L_EDGE - (textWidth(s) - 1);        // right-align left number
+const clampT = (t, a, b) => Math.max(0, Math.min(1, (t - a) / (b - a)));
+const ez = (t, a, b) => ease(clampT(t, a, b));
+
+function netLine() { for (let x = 0; x < 32; x++) set(x, 8); }   // the dividing line
+// Sets: a post at each edge. The first set won fills the lower four rows
+// against the edge, the second fills the upper four.
+function setsTally(l, r) {
+  for (let y = 9; y < 16; y++) { set(2, y); set(29, y); }
+  const cell = (x0, i) => { for (let y = i ? 8 : 12; y < (i ? 12 : 16); y++) { set(x0, y); set(x0 + 1, y); } };
+  for (let i = 0; i < l; i++) cell(0, i);
+  for (let i = 0; i < r; i++) cell(30, i);
+}
+const PY = 0;                                       // points row
+function points(l, r, dl = 0, dr = 0) {
+  text(l, lx(l) + dl, PY); text(r, R_EDGE + dr, PY);
+  if (dl === 0 && dr === 0) for (let x = 14; x <= 17; x++) set(x, PY + 3);   // the dash
+}
+function games(l, r) { text3(l, GL, GY); text3(r, GR, GY); }
+// Odometer roll inside a clipped window. dir +1 = new value comes up from below.
+function roll(oldS, newS, xOf, y, p, dir, small) {   // small: true = 3x5 face, "4" = condensed 4x7 face
+  const h = small === true ? 5 : 7, draw = small === true ? text3 : small === "4" ? text4 : text;
+  const off = Math.round(ease(p) * (h + 1)) * dir;
+  clip = [0, 31, y, y + h - 1];
+  draw(oldS, xOf(oldS), y - off);
+  draw(newS, xOf(newS), y + (h + 1) * dir - off);
+  clip = null;
+}
+// Winning ball crosses the panel along the gap row toward the side that won the point. dir +1 = left to right.
+function winBall(t, t0, dir, dashed) {
+  const p = clampT(t, t0, t0 + 0.35);
+  if (p >= 1) return;
+  const head = dir > 0 ? lerp(-1, 34, p) : lerp(32, -3, p);
+  for (let k = 0; k < 4; k++) {
+    if (dashed && k % 2) continue;
+    const x = Math.round(head - k * dir * 1.2);
+    set(x, 7); if (k === 0) { set(x, 8, 0); set(x - dir, 8, 0); }   // ball, with its shadow in the line
+  }
+}
+// Serve indicator: a triangle at the bottom centre whose right angle faces the
+// corner the serve comes from. side 0/1 = left/right court, box 0/1 = top/bottom.
+// Steady: no blink, so the resting board has nothing moving on it.
+let T = 0;                                           // wall time, set by animate()
+function serve(side, box, size = 4) {
+  const x0 = side ? 18 : 13, y0 = box ? 14 : 10;
+  for (let j = 0; j < size; j++) for (let i = 0; i + j < size; i++)
+    set(x0 + (side ? -i : i), y0 + (box ? -j : j));
+}
+// Move the wedge from one corner to another: shrinks away, grows in the new corner.
+function serveFlip(a, b, p) {
+  if (p <= 0) return serve(a.sv, a.bx);
+  if (p >= 1) return serve(b.sv, b.bx);
+  if (p < 0.5) { const n = Math.round(4 * (1 - 2 * p)); if (n) serve(a.sv, a.bx, n); }
+  else { const n = Math.round(4 * (2 * p - 1)); if (n) serve(b.sv, b.bx, n); }
+}
+function board(s) {                                 // s = {lp, rp, lg, rg, ls, rs, sv, bx}
+  netLine(); points(s.lp, s.rp); games(s.lg, s.rg); setsTally(s.ls, s.rs); serve(s.sv, s.bx);
+}
+const ST = (lp, rp, lg, rg, ls, rs, sv = 0, bx = 0) => ({ lp: PTS[lp], rp: PTS[rp], lg: "" + lg, rg: "" + rg, ls, rs, sv, bx });
+
+// ---- Point scored: ball flies to the scorer's side, their points roll up. 0.75s
+function pointClip(side) {
+  const a = ST(2, 1, 3, 2, 1, 0, 0, 0), b = side ? ST(2, 2, 3, 2, 1, 0, 0, 1) : ST(3, 1, 3, 2, 1, 0, 0, 1);
+  return t => {
+    netLine(); games(a.lg, a.rg); setsTally(a.ls, a.rs); serveFlip(a, b, clampT(t, 0.5, 0.75));
+    const p = clampT(t, 0.3, 0.7);
+    for (let x = 14; x <= 17; x++) set(x, PY + 3);
+    if (side) { text(a.lp, lx(a.lp), PY); roll(a.rp, b.rp, () => R_EDGE, PY, p, 1); }
+    else      { text(a.rp, R_EDGE, PY);  roll(a.lp, b.lp, lx, PY, p, 1); }
+    winBall(t, 0, side ? 1 : -1);
+  };
+}
+// ---- Undo: the line runs backwards (dark gaps marching right to left), the score row
+//      is tugged back, points roll back down. 0.75s
+function undoClip() {
+  const a = ST(3, 1, 3, 2, 1, 0, 0, 1), b = ST(2, 1, 3, 2, 1, 0, 0, 0);
+  return t => {
+    netLine(); games(a.lg, a.rg); setsTally(a.ls, a.rs); serveFlip(a, b, clampT(t, 0.5, 0.75));
+    if (t < 0.75) { const ph = Math.floor(t * 40); for (let x = 0; x < 32; x++) if ((x + ph) % 6 < 3) set(x, 8, 0); }
+    const tug = t > 0.05 && t < 0.3 ? -1 : 0;        // whole score row is pulled back for a moment
+    for (let x = 14; x <= 17; x++) set(x + tug, PY + 3);
+    text(a.rp, R_EDGE + tug, PY);
+    roll(a.lp, b.lp, v => lx(v) + tug, PY, clampT(t, 0.3, 0.7), -1);
+  };
+}
+// ---- Game: points slide off, GAME drops in, games digit rolls, new points wipe in. 2.4s
+function gameClip() {
+  const a = ST(3, 2, 3, 2, 1, 0, 0, 1), b = ST(0, 0, 4, 2, 1, 0, 1, 0);
+  return t => {
+    netLine(); setsTally(a.ls, a.rs);
+    serveFlip(a, b, clampT(t, 2.05, 2.3));
+    // games row
+    if (t < 1.5) games(a.lg, a.rg);
+    else { text3(a.rg, GR, GY); roll(a.lg, b.lg, () => GL, GY, clampT(t, 1.5, 1.9), 1, true); }
+    if (t >= 1.5 && t < 1.7) { set(GL - 1, GY - 1); set(GL + 3, GY - 1); set(GL - 1, GY + 5); set(GL + 3, GY + 5); }  // sparkle
+    // points row
+    if (t < 0.7) {
+      const s = Math.round(ez(t, 0.35, 0.7) * 16);
+      points(a.lp, a.rp, -s, s);                      // dash simply goes when the numbers start to move
+    }
+    if (t >= 0.7) {
+      const up = Math.round(ez(t, 2.0, 2.4) * 9);
+      "GAME".split("").forEach((c, i) => {
+        const y = Math.round(lerp(-8, PY, easeBack(clampT(t, 0.7 + i * 0.15, 1.05 + i * 0.15))));
+        text(c, 4 + i * 6, y - up);
+      });
+    }
+    if (t >= 2.0) {                                 // new points wipe in from the net outward
+      const w = Math.round(ez(t, 2.05, 2.4) * 14);
+      clip = [15 - w, 16 + w, PY, PY + 6]; points(b.lp, b.rp); clip = null;
+    }
+    winBall(t, 0, -1);
+  };
+}
+// ---- Set: panel floods from the winner's side, SET + score punched out, curtain drops. 3.4s
+function setClip() {
+  const a = ST(3, 2, 5, 4, 1, 0, 0, 1), b = ST(0, 0, 0, 0, 2, 0, 1, 0);
+  return t => {
+    board(t < 2.1 ? a : b);
+    const fillTo = Math.round(ez(t, 0.35, 0.85) * 32);            // columns lit
+    const cut = Math.round(ez(t, 2.1, 2.6) * 16);                 // rows drained
+    if (t >= 0.35) {
+      for (let y = cut; y < 16; y++) for (let x = 0; x < fillTo; x++) set(x, y);
+      clip = [0, 31, cut, 15];
+      "SET".split("").forEach((c, i) => { if (t >= 0.85 + i * 0.15) text(c, 7 + i * 6, 1, 0); });
+      if (t >= 1.4) text3("6-4", 10, 9, 0);
+      clip = null;
+    }
+    if (t >= 2.6 && t < 3.4 && Math.floor((t - 2.6) / 0.13) % 2) for (let y = 8; y < 12; y++) { set(0, y, 0); set(1, y, 0); set(2, y, 0); }  // new block blinks
+    winBall(t, 0, -1);
+  };
+}
+// ---- Match: board dissolves, MATCH drops in, fireworks, then the final score wipes in and stays. 6.5s
+const perm = (() => { let s = 7; const r = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const a = [...Array(512).keys()]; for (let i = 511; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; })();
+const ROCKETS = [[1.3, 6], [1.7, 25], [2.2, 15], [2.7, 10], [3.1, 22]];
+function firework(t, t0, x0) {
+  const rise = 0.45, life = 0.7, ay = 10;
+  const d = t - t0;
+  if (d < 0 || d > rise + life) return;
+  if (d < rise) { set(x0, Math.round(lerp(15, ay, ease(d / rise)))); return; }
+  const b = (d - rise) / life;
+  if (b > 0.55 && Math.floor(b * 24) % 2) return;                // twinkle out
+  for (let i = 0; i < 8; i++) {
+    const an = i * Math.PI / 4 + 0.3, sp = 5.5;
+    set(x0 + Math.cos(an) * sp * b, ay + Math.sin(an) * sp * b * 0.8 + 5 * b * b);
+  }
+}
+function matchClip() {
+  const a = ST(3, 2, 5, 3, 1, 0, 0, 1);
+  return t => {
+    if (t < 1.0) {
+      board(a); winBall(t, 0, -1);
+      const n = Math.round(ez(t, 0.35, 1.0) * 512);
+      for (let i = 0; i < n; i++) buf[perm[i]] = 0;
+      return;
+    }
+    "MATCH".split("").forEach((c, i) => {
+      const y = Math.round(lerp(-8, 0, easeBack(clampT(t, 1.0 + i * 0.12, 1.4 + i * 0.12))));
+      text(c, 1 + i * 6, y);
+    });
+    ROCKETS.forEach(([t0, x]) => firework(t, t0, x));
+    if (t >= 4.0) {                                           // final score wipes in from the centre and stays
+      const w = Math.round(ez(t, 4.0, 4.4) * 16);
+      clip = [16 - w, 15 + w, 9, 13]; text3("6-4 6-3", 2, 9); clip = null;
+    }
+  };
+}
+
+// ---- Bind controllers: the word alternates PRESS / LEFT while an arrowhead beckons at
+//      the left edge. On the press a lit bar wipes across from the left, revealing
+//      PRESS / RIGHT with the arrow at the right edge. The second press wipes in from
+//      the right and reveals the SELECT / SERVE prompt. Simulated presses at 3.6s and 7.8s. 8.4s
+function tri(x, dir, nudge) {                       // arrowhead pointing in dir, tip at x, nudged that way
+  for (let i = 0; i < 3; i++) for (let y = 12 - i; y <= 12 + i; y++) set(x + (nudge - i) * dir, y);
+}
+const wordX = w => Math.round((32 - (textWidth(w) - 1)) / 2);
+function altWords(a, b, t, y = 0, hold = 0.6, rl = 0.15, font) {   // a, roll, b, roll back
+  const ph = t % (2 * (hold + rl)), draw = font === "4" ? text4 : text, xo = font === "4" ? wordX4 : wordX;
+  if (ph < hold) draw(a, xo(a), y);
+  else if (ph < hold + rl) roll(a, b, xo, y, (ph - hold) / rl, 1, font);
+  else if (ph < 2 * hold + rl) draw(b, xo(b), y);
+  else roll(b, a, xo, y, (ph - 2 * hold - rl) / rl, 1, font);
+}
+const wordX4 = w => Math.round((32 - (w.length * 5 - 1)) / 2);
+// A lit bar sweeps across in dir, hiding `before` as it leads and revealing `after` behind it.
+function barWipe(t, t0, dir, before, after) {
+  const lead = Math.round(ez(t, t0, t0 + 0.3) * 32), trail = Math.round(ez(t, t0 + 0.25, t0 + 0.6) * 32);
+  const col = k => dir > 0 ? k : 31 - k;
+  before();
+  for (let k = trail; k < lead; k++) for (let y = 0; y < 16; y++) set(col(k), y);
+  if (trail > 0) {
+    clip = dir > 0 ? [0, trail - 1, 0, 15] : [32 - trail, 31, 0, 15];
+    for (let k = 0; k < trail; k++) for (let y = 0; y < 16; y++) set(col(k), y, 0);
+    after(); clip = null;
+  }
+}
+function bindClip() {
+  const PL = 3.6, PR = 7.8;
+  const fresh = ST(0, 0, 0, 0, 0, 0, 0, 0);
+  return t => {
+    const n = Math.floor(t / 0.5) % 2;
+    const left = () => { netLine(); altWords("PRESS", "LEFT", t, 0, 0.9, 0.2); tri(4, -1, n); };
+    const right = () => { netLine(); altWords("PRESS", "RIGHT", t - PL - 0.6, 0, 0.9, 0.2); tri(27, 1, n); };
+    const done = () => servePrompt(t - PR - 0.6);      // hands over to the first-serve prompt, whose clock starts as the wipe ends (so it reads SELECT first)
+    if (t < PL) left();
+    else if (t < PL + 0.6) barWipe(t, PL, 1, left, right);
+    else if (t < PR) right();
+    else barWipe(t, PR, -1, right, done);
+  };
+}
+
+// ---- Swap ends: the board slides into the centre and vanishes, then SWAP / ENDS alternates
+//      with two arrowheads walking in from the edges and crossing until a button is pressed
+//      (simulated at 3.5s). The prompt rolls away and the board emerges swapped. 4.4s
+function swapClip() {
+  const a = ST(2, 1, 3, 2, 1, 0, 0, 0), b = ST(1, 2, 2, 3, 0, 1, 1, 0);
+  const PRESS = 3.5, EMERGE = PRESS + 0.3;
+  return t => {
+    netLine();
+    const IN = Math.pow(clampT(t, 0, 0.5), 2), OUTP = ez(t, EMERGE, EMERGE + 0.6);   // accelerate in, decelerate out
+    const s = t < EMERGE ? a : b, k = t < EMERGE ? Math.round(IN * 12) : Math.round((1 - OUTP) * 12);
+    if (t < 0.5 || t >= EMERGE) {
+      for (let x = 14; x <= 17; x++) set(x, PY + 3);
+      clip = [0, 13, 0, 15]; text(s.lp, lx(s.lp) + k, PY); text3(s.lg, GL + k, GY); clip = null;    // left half slides in / out
+      clip = [18, 31, 0, 15]; text(s.rp, R_EDGE - k, PY); text3(s.rg, GR - k, GY); clip = null;     // right half
+    }
+    const h = t < EMERGE ? 1 - IN : OUTP;                                                          // set cells shrink then regrow
+    for (let y = 9; y < 16; y++) { set(2, y); set(29, y); }
+    const cell = (x0, i) => { const rows = Math.round(4 * h); for (let y = (i ? 12 : 16) - rows; y < (i ? 12 : 16); y++) { set(x0, y); set(x0 + 1, y); } };
+    for (let i = 0; i < s.ls; i++) cell(0, i);
+    for (let i = 0; i < s.rs; i++) cell(30, i);
+    if (t >= 0.5 && t < EMERGE) {                      // the prompt
+      const up = Math.round(ez(t, PRESS, EMERGE) * 8);  // rolls away once acknowledged
+      clip = [0, 31, PY, PY + 6]; altWords("SWAP", "ENDS", t - 0.5, PY - up); clip = null;
+      const ph = (t - 0.5) % 1.5;                       // arrowheads walk in from each edge and cross through each other
+      if (t < PRESS && ph < 1.1) { const d = Math.round(ease(ph / 1.1) * 23); tri(5 + d, 1, 0); tri(26 - d, -1, 0); }
+    }
+    if (t < 0.5) serve(a.sv, a.bx); else if (t >= EMERGE) serve(b.sv, b.bx);
+  };
+}
+// ---- Golden point: the point that makes 40-40 lands, the dash stands up into a vertical bar
+//      which splits and sweeps both ways to the edges, wiping 40-40 away and leaving GOLDEN
+//      (a tighter 4-wide face so it fits) behind it, with one glint. GOLDEN stays up. 2.3s
+const F4 = {
+  G: [".##.", "#..#", "#...", "#.##", "#..#", "#..#", ".##."],
+  O: [".##.", "#..#", "#..#", "#..#", "#..#", "#..#", ".##."],
+  L: ["#...", "#...", "#...", "#...", "#...", "#...", "####"],
+  D: ["###.", "#..#", "#..#", "#..#", "#..#", "#..#", "###."],
+  E: ["####", "#...", "#...", "###.", "#...", "#...", "####"],
+  N: ["#..#", "##.#", "##.#", "#.##", "#.##", "#..#", "#..#"],
+  S: [".###", "#...", "#...", ".##.", "...#", "...#", "###."],
+  C: [".##.", "#..#", "#...", "#...", "#...", "#..#", ".##."],
+  T: ["####", ".#..", ".#..", ".#..", ".#..", ".#..", ".#.."],
+  R: ["###.", "#..#", "#..#", "###.", "#.#.", "#..#", "#..#"],
+  V: ["#..#", "#..#", "#..#", "#..#", "#..#", ".##.", ".##."],
+};
+function text4(str, x, y) {
+  for (const c of str) { const g = F4[c]; if (g) for (let j = 0; j < 7; j++) for (let i = 0; i < 4; i++) if (g[j][i] === "#") set(x + i, y + j); x += 5; }
+}
+function goldClip() {
+  const a = ST(3, 2, 3, 2, 1, 0, 1, 0), b = ST(3, 3, 3, 2, 1, 0, 1, 1);
+  const GX = 2;                                      // GOLDEN is 29 wide: cols 2-30
+  return t => {
+    netLine(); games(a.lg, a.rg); setsTally(a.ls, a.rs); serveFlip(a, b, clampT(t, 0.5, 0.75));
+    const T1 = 0.75, T2 = 1.0, T3 = 1.45;           // dash becomes a bar; bars sweep out; done
+    if (t < T2) {                                     // the point lands; the dash stands up into a vertical bar
+      text(a.lp, lx(a.lp), PY); roll(a.rp, b.rp, () => R_EDGE, PY, clampT(t, 0.3, 0.7), 1);
+      winBall(t, 0, 1);
+      const p = ez(t, T1, T2), hw = Math.round(lerp(2, 1, p)), hh = Math.round(lerp(0, 3, p));
+      for (let y = PY + 3 - hh; y <= PY + 3 + hh; y++) for (let x = 16 - hw; x <= 15 + hw; x++) set(x, y);
+    } else if (t < T3) {                              // twin bars sweep to the edges, 40-40 ahead of them, GOLDEN behind
+      const d = Math.round(ez(t, T2, T3) * 16);
+      clip = [0, 13 - d, PY, PY + 6]; text(b.lp, lx(b.lp), PY); clip = [18 + d, 31, PY, PY + 6]; text(b.rp, R_EDGE, PY);
+      clip = [15 - d, 16 + d, PY, PY + 6]; text4("GOLDEN", GX, PY); clip = null;
+      for (let y = PY; y <= PY + 6; y++) { set(15 - d, y); set(16 + d, y); }
+    } else {
+      text4("GOLDEN", GX, PY);
+      const g = ez(t, 1.6, 2.2) * 44 - 6;             // one glint: a dark diagonal streak crossing the letters
+      if (t >= 1.6 && t < 2.2) for (let y = PY; y <= PY + 6; y++) { set(Math.round(g - y), y, 0); set(Math.round(g - y) + 1, y, 0); }
+    }
+  };
+}
+
+// ---- First serve: SELECT / SERVE alternates on top while an arrowhead beckons at each
+//      edge; the side that serves presses. The prompt rolls away, their arrowhead glides to
+//      the bottom centre and becomes the serve triangle, and the rest of the fresh board
+//      emerges from the centre around it. Simulated left press at 3.0s. 4.4s
+function marquee(str, t, y, speed = 25, gap = 16) { // continuous right-to-left scroll
+  const w = textWidth(str) + gap - 1, period = w / speed;
+  const x = 32 - (t % period) * speed;
+  text(str, Math.round(x), y); text(str, Math.round(x + w), y); if (x + 2 * w < 32) text(str, Math.round(x + 2 * w), y);
+}
+function servePrompt(t, arrows = true) {            // the waiting state, shared with the end of Bind
+  netLine(); altWords("SELECT", "SERVE", t, 0, 0.9, 0.2, "4");  // condensed face so SELECT fits; calmer pace than Bind
+  if (arrows) { const n = Math.floor(t / 0.5) % 2; tri(4, -1, n); tri(27, 1, n); }
+}
+function firstServeClip() {
+  const PRESS = 3.0, GLIDE = PRESS + 0.5, MORPH = GLIDE + 0.3, DONE = MORPH + 0.6;
+  const BX = 1;                                     // the left team's right-hand box is the bottom of the panel
+  return t => {
+    if (t < PRESS) { servePrompt(t); return; }
+    netLine();
+    const up = Math.round(ez(t, PRESS, PRESS + 0.3) * 8);            // the prompt rolls up and out
+    if (up < 8) { clip = [0, 31, PY, PY + 6]; altWords("SELECT", "SERVE", t, PY - up, 0.9, 0.2, "4"); clip = null; }
+    if (t < GLIDE) tri(Math.round(lerp(4, 13, ez(t, PRESS, GLIDE))), -1, 0);
+    else if (t < MORPH) { const p = clampT(t, GLIDE, MORPH); if (p < 0.5) { const k = Math.round(2 * (1 - 2 * p)); for (let i = 0; i <= k; i++) for (let y = 12 - i; y <= 12 + i; y++) set(13 + i, y); } else serve(0, BX, Math.max(1, Math.round(4 * (2 * p - 1)))); }
+    else {                                                            // the rest of the board emerges from the centre around the triangle
+      serve(0, BX);
+      const o = ez(t, MORPH, DONE), k = Math.round((1 - o) * 12);
+      for (let x = 14; x <= 17; x++) set(x, PY + 3);
+      clip = [0, 13, 0, 15]; text("0", lx("0") + k, PY); text3("0", GL + k, GY); clip = null;
+      clip = [18, 31, 0, 15]; text("0", R_EDGE - k, PY); text3("0", GR - k, GY); clip = null;
+      const rows = Math.round(o * 7); for (let y = 9; y < 9 + rows; y++) { set(2, y); set(29, y); }   // set posts grow down from the line
+    }
+  };
+}
+
+const CLIPS = [
+  { name: "Splash",  dur: 2.5 + RALLY_MS / 1000 + 0.95 + 2.2, loopFrom: 0, fn: splash },
+  { name: "Bind",    dur: 8.4,  hold: 1.5,     fn: bindClip() },
+  { name: "Serve?",  dur: 4.4,  hold: 1.5,     fn: firstServeClip() },
+  { name: "Point L", dur: 0.75, hold: 1.2,     fn: pointClip(0) },
+  { name: "Point R", dur: 0.75, hold: 1.2,     fn: pointClip(1) },
+  { name: "Undo",    dur: 0.75, hold: 1.2,     fn: undoClip() },
+  { name: "Game",    dur: 2.4,  hold: 1.5,     fn: gameClip() },
+  { name: "Set",     dur: 3.4,  hold: 1.5,     fn: setClip() },
+  { name: "Match",   dur: 6.5,  hold: 1.5,     fn: matchClip() },
+  { name: "Swap",    dur: 4.4,  hold: 1.5,     fn: swapClip() },
+  { name: "Golden",  dur: 2.3,  hold: 2.5,     fn: goldClip() },
+];
+let clipIdx = 1;
+function animate(f, t) {
+  clear();
+  const c = CLIPS[clipIdx];
+  let lt = t;
+  if (c.loopFrom != null) { if (lt > c.dur) lt = c.loopFrom + (lt - c.dur) % (c.dur - c.loopFrom); }
+  else { lt = lt % (c.dur + c.hold); if (lt > c.dur) lt = c.dur; }
+  T = t;
+  c.fn(lt);
+  return lt;
+}
+
+/* =====================================================================
+   SIMULATOR — no need to edit below.
+   ===================================================================== */
+const W = 32, H = 16;
+const buf = new Float32Array(W * H);
+const clamp = v => Math.max(0, Math.min(1, v));
+function clear() { buf.fill(0); }
+let clip = null;   // [x0, x1, y0, y1] inclusive, or null
+function set(x, y, v = 1) {
+  x = Math.round(x); y = Math.round(y);
+  if (x < 0 || x >= W || y < 0 || y >= H) return;
+  if (clip && (x < clip[0] || x > clip[1] || y < clip[2] || y > clip[3])) return;
+  buf[y * W + x] = clamp(v);
+}
+function get(x, y) { return (x >= 0 && x < W && y >= 0 && y < H) ? buf[(y|0) * W + (x|0)] : 0; }
+function line(x0, y0, x1, y1, v = 1) {
+  x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0;
+  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let e = dx + dy;
+  for (;;) { set(x0, y0, v); if (x0 === x1 && y0 === y1) break; const e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
+}
+function rect(x, y, w, h, v = 1, fill = false) {
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++)
+    if (fill || i === 0 || j === 0 || i === w - 1 || j === h - 1) set(x + i, y + j, v);
+}
+
+// 5x7 font, each glyph = 5 column bytes, bit 0 = top row
+const FONT = {
+  " ":[0,0,0,0,0], "!":[0,0,95,0,0], "-":[8,8,8,8,8], ".":[0,96,96,0,0], ":":[0,54,54,0,0], "/":[32,16,8,4,2],
+  "0":[62,81,73,69,62],"1":[0,66,127,64,0],"2":[66,97,81,73,70],"3":[33,65,69,75,49],"4":[24,20,18,127,16],
+  "5":[39,69,69,69,57],"6":[60,74,73,73,48],"7":[1,113,9,5,3],"8":[54,73,73,73,54],"9":[6,73,73,41,30],
+  "A":[126,17,17,17,126],"B":[127,73,73,73,54],"C":[62,65,65,65,34],"D":[127,65,65,34,28],"E":[127,73,73,73,65],
+  "F":[127,9,9,9,1],"G":[62,65,73,73,122],"H":[127,8,8,8,127],"I":[0,65,127,65,0],"J":[32,64,65,63,1],
+  "K":[127,8,20,34,65],"L":[127,64,64,64,64],"M":[127,2,12,2,127],"N":[127,4,8,16,127],"O":[62,65,65,65,62],
+  "P":[127,9,9,9,6],"Q":[62,65,81,33,94],"R":[127,9,25,41,70],"S":[70,73,73,73,49],"T":[1,1,127,1,1],
+  "U":[63,64,64,64,63],"V":[31,32,64,32,31],"W":[63,64,56,64,63],"X":[99,20,8,20,99],"Y":[7,8,112,8,7],"Z":[97,81,73,69,67],
+  "x":[68,40,16,40,68]
+};
+function glyph(c) { return FONT[c] || FONT[c.toUpperCase()] || FONT[" "]; }
+function textWidth(s) { return s.length * 6; }
+function text(s, x, y, v = 1) {
+  let cx = x | 0;
+  for (const c of s) {
+    const g = glyph(c);
+    for (let i = 0; i < 5; i++) for (let j = 0; j < 7; j++) if (g[i] >> j & 1) set(cx + i, y + j, v);
+    cx += 6;
+  }
+  return cx - x;
+}
+const F3 = { "0":["111","101","101","101","111"],"1":["010","110","010","010","111"],"2":["111","001","111","100","111"],
+  "3":["111","001","111","001","111"],"4":["101","101","111","001","001"],"5":["111","100","111","001","111"],
+  "6":["111","100","111","101","111"],"7":["111","001","001","010","010"],"8":["111","101","111","101","111"],
+  "9":["111","101","111","001","111"],"-":["000","000","111","000","000"]," ":["000","000","000","000","000"] };
+function text3(s, x, y, v = 1) {
+  let cx = x | 0;
+  for (const c of s) { const g = F3[c] || F3[" "]; for (let j = 0; j < 5; j++) for (let i = 0; i < 3; i++) if (g[j][i] === "1") set(cx + i, y + j, v); cx += 4; }
+  return cx - x - 1;
+}
+
+// Rendering
+const cv = document.getElementById("panel"), ctx = cv.getContext("2d");
+const css = getComputedStyle(document.documentElement);
+const ON = css.getPropertyValue("--led-on").trim(), OFF = css.getPropertyValue("--led-off").trim();
+const PITCH = cv.width / W, R = PITCH * 0.36;
+const stat = document.getElementById("stat");
+
+function draw() {
+  ctx.fillStyle = "#050505";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  // off LEDs
+  ctx.fillStyle = OFF;
+  ctx.beginPath();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const cx = (x + .5) * PITCH, cy = (y + .5) * PITCH;
+    ctx.moveTo(cx + R, cy); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  }
+  ctx.fill();
+  // lit LEDs with glow
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const v = buf[y * W + x]; if (!v) continue;
+    const cx = (x + .5) * PITCH, cy = (y + .5) * PITCH;
+    ctx.globalAlpha = v * 0.35;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, PITCH * 0.9);
+    g.addColorStop(0, ON); g.addColorStop(1, "rgba(255,198,26,0)");
+    ctx.fillStyle = g; ctx.fillRect(cx - PITCH, cy - PITCH, PITCH * 2, PITCH * 2);
+    ctx.globalAlpha = v;
+    ctx.fillStyle = ON; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(255,250,220,.55)"; ctx.beginPath(); ctx.arc(cx - R * .25, cy - R * .25, R * .4, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+let frame = 0, start = performance.now(), last = 0;
+const bar = document.getElementById("clips");
+CLIPS.forEach((c, i) => {
+  const b = document.createElement("button"); b.type = "button"; b.id = "clip-" + i; b.textContent = c.name;
+  b.onclick = () => { clipIdx = i; start = performance.now(); frame = 0; [...bar.children].forEach((e, j) => e.setAttribute("aria-pressed", j === i)); };
+  b.setAttribute("aria-pressed", i === clipIdx); bar.appendChild(b);
+});
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (now - last < 1000 / FPS - 1) return;
+  last = now;
+  let lt = 0;
+  try { lt = animate(frame, (now - start) / 1000); } catch (e) { console.error(e); }
+  draw();
+  stat.textContent = `${CLIPS[clipIdx].name} · ${lt.toFixed(2)}s`;
+  frame++;
+}
+requestAnimationFrame(loop);
+</script>

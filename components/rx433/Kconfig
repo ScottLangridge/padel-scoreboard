@@ -8,14 +8,32 @@ menu "433MHz Receiver"
             GPIO connected to the 433 MHz receiver DATA output. The component
             doesn't read this itself; pass it in rx433_config_t.gpio.
 
+    config RX433_BITS
+        int "Expected bits per frame (0 = any 12-32)"
+        range 0 32
+        default 24
+        help
+            Frames with any other length are dropped. EV1527 remotes send
+            24 bits; PT2262-style ones send 12 or 24 depending on how they
+            are read.
+
     config RX433_RELEASE_MS
         int "Release timeout (ms)"
         range 50 2000
-        default 200
+        default 400
         help
             A RELEASE event is sent when no frame of the held code has
             arrived for this long. Remotes repeat every ~40-50 ms while a
-            button is held.
+            button is held, but a weak remote near interference can drop
+            frames for ~300 ms at a time; shorter than that splits one
+            press into two.
+
+    config RX433_LOG_FRAMES
+        bool "Log every decoded frame"
+        default n
+        help
+            Logs each frame before the two-identical-frames check and press
+            tracking. Useful for checking a new remote decodes at all.
 
     config RX433_TASK_PRIORITY
         int "Decoder task priority"
