@@ -385,7 +385,10 @@ static bool is_known(uint32_t code, uint8_t bits)
     return false;
 }
 
-static void pressed(const seen_t *seen, uint16_t pulse_us, TickType_t now)
+// A confirmed frame of `seen`: starts a press if it is a new code (releasing
+// any other held code first), keeps it alive, sends LONG once it is due, and
+// remembers the code.
+static void track_press(const seen_t *seen, uint16_t pulse_us, TickType_t now)
 {
     if (s_held.valid && (s_held.code != seen->code || s_held.bits != seen->bits)) {
         emit(RX433_EVENT_RELEASE, &s_held, 0);
@@ -424,7 +427,7 @@ static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
 #endif
         if (confirmed) {
             s_candidate.valid = false;
-            pressed(&seen, pulse_us, now);
+            track_press(&seen, pulse_us, now);
         } else {
             s_candidate = seen;
         }
@@ -449,11 +452,12 @@ static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
     if (match) {
         seen_t seen = *match;
         s_candidate.valid = false;
-        pressed(&seen, pulse_us, now);
+        track_press(&seen, pulse_us, now);
     }
 }
 
-static void check_release(void)
+// Sends RELEASE once the held code has gone quiet for RELEASE_MS.
+static void release_if_idle(void)
 {
     if (s_held.valid && xTaskGetTickCount() - s_held.last_seen > pdMS_TO_TICKS(RELEASE_MS)) {
         emit(RX433_EVENT_RELEASE, &s_held, 0);
@@ -472,7 +476,7 @@ static void rx_task(void *arg)
         for (size_t i = 0; i < received / sizeof(buf[0]); i++) {
             frame_feed(&buf[i]);
         }
-        check_release();
+        release_if_idle();
     }
 }
 

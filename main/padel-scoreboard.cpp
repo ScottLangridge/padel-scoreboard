@@ -298,7 +298,7 @@ static void swap_ends(const Board &from, const Board &to)
 
 // A point to `team`: the score moves on and the matching animation plays,
 // then Swap Ends after a set.
-static void scored(int team)
+static void award_point(int team)
 {
     Score before = match.score();
     bool swapped = before.endsSwapped();
@@ -391,7 +391,7 @@ extern "C" void app_main(void)
             if (team >= 0 && team == held) {
                 if (!long_done) {
                     ESP_LOGI(TAG, "point to team %c", 'A' + team);
-                    scored(team);
+                    award_point(team);
                 }
                 held = -1;
             }
