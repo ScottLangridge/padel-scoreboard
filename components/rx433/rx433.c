@@ -172,7 +172,7 @@ static segment_t decode_segment(int from, uint32_t bit_period, int max_bits)
     while (i >= 0 && seg.bits < max_bits) {
         uint32_t period, short_us;
         bool is_one;
-        int step_bits = 1; // bits this step produces
+        int step_bits = 1; // bits this step produces: more when a missed-pulse repair finds hidden 0s
 
         if (is_bit(&s_frame[i], &period, &short_us, &is_one) && period_matches(period, bit_period)) {
             i--;
@@ -195,8 +195,9 @@ static segment_t decode_segment(int from, uint32_t bit_period, int max_bits)
             const rmt_symbol_word_t *sym = &s_frame[i];
             if (!repaired && sym->level0 == 1 && sym->level1 == 0 && sym->duration1) {
                 uint32_t len = sym->duration0 + sym->duration1;
-                for (step_bits = 2; step_bits <= MAX_MISSED + 1; step_bits++) {
-                    if (period_matches(len, bit_period * step_bits) && seg.bits + step_bits <= max_bits) {
+                for (int bit_count = 2; bit_count <= MAX_MISSED + 1; bit_count++) {
+                    if (period_matches(len, bit_period * bit_count) && seg.bits + bit_count <= max_bits) {
+                        step_bits = bit_count;
                         is_one = sym->duration0 * 2 > bit_period;
                         short_us = is_one ? bit_period / 4 : sym->duration0;
                         i--;
@@ -218,7 +219,6 @@ static segment_t decode_segment(int from, uint32_t bit_period, int max_bits)
         seg.code |= (uint32_t)is_one << seg.bits;
         seg.short_sum += short_us;
         seg.bits++;
-        step_bits = 1;
     }
     seg.stop = i;
     return seg;
@@ -497,8 +497,8 @@ esp_err_t rx433_start(const rx433_config_t *config)
     ESP_RETURN_ON_ERROR(rmt_rx_register_event_callbacks(s_channel, &callbacks, NULL), TAG, "callbacks");
     ESP_RETURN_ON_ERROR(rmt_enable(s_channel), TAG, "enable");
 
-    BaseType_t repaired = xTaskCreate(rx_task, "rx433", 4096, NULL, CONFIG_RX433_TASK_PRIORITY, NULL);
-    ESP_RETURN_ON_FALSE(repaired == pdPASS, ESP_ERR_NO_MEM, TAG, "task");
+    BaseType_t created = xTaskCreate(rx_task, "rx433", 4096, NULL, CONFIG_RX433_TASK_PRIORITY, NULL);
+    ESP_RETURN_ON_FALSE(created == pdPASS, ESP_ERR_NO_MEM, TAG, "task");
 
     ESP_RETURN_ON_ERROR(rmt_receive(s_channel, s_chunk, sizeof(s_chunk), &s_rx_cfg), TAG, "receive");
     ESP_LOGI(TAG, "listening on GPIO%d", config->gpio);

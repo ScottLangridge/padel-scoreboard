@@ -164,11 +164,11 @@ static void pointsRow(Canvas &canvas, const Board &board, int dx = 0, int y = PO
 
 static void games(Canvas &canvas, const Board &board)
 {
-    char buf[4];
-    snprintf(buf, sizeof buf, "%d", board.games[0]);
-    text3x5(canvas, buf, GAMES_LEFT_X, GAMES_Y);
-    snprintf(buf, sizeof buf, "%d", board.games[1]);
-    text3x5(canvas, buf, GAMES_RIGHT_X, GAMES_Y);
+    char leftBuf[4], rightBuf[4];
+    snprintf(leftBuf, sizeof leftBuf, "%d", board.games[0]);
+    snprintf(rightBuf, sizeof rightBuf, "%d", board.games[1]);
+    text3x5(canvas, leftBuf, GAMES_LEFT_X, GAMES_Y);
+    text3x5(canvas, rightBuf, GAMES_RIGHT_X, GAMES_Y);
 }
 
 static void setPosts(Canvas &canvas)
@@ -489,8 +489,8 @@ void animUndo(Canvas &canvas, double t, const Board &from, const Board &to)
         return;
     }
     dash(canvas, tug);
-    char oldBuf[4], newBuf[4];
     for (int side = 0; side < 2; side++) {
+        char oldBuf[4], newBuf[4];
         const char *oldText = ptsText(from, side, oldBuf), *newText = ptsText(to, side, newBuf);
         auto xForText = [side, tug](const char *str) { return (side ? POINTS_RIGHT_X : leftPointsX(str)) + tug; };
         if (strcmp(oldText, newText) == 0) {
@@ -516,11 +516,11 @@ void animGame(Canvas &canvas, double t, const Board &from, const Board &to, int 
     if (t < 1.5) {
         games(canvas, from);
     } else {
-        char leftBuf[4], oldBuf[4], newBuf[4];
-        snprintf(leftBuf, sizeof leftBuf, "%d", from.games[loser]);
+        char loserBuf[4], oldBuf[4], newBuf[4];
+        snprintf(loserBuf, sizeof loserBuf, "%d", from.games[loser]);
         snprintf(oldBuf, sizeof oldBuf, "%d", from.games[winner]);
         snprintf(newBuf, sizeof newBuf, "%d", to.games[winner]);
-        text3x5(canvas, leftBuf, loserGamesX, GAMES_Y);
+        text3x5(canvas, loserBuf, loserGamesX, GAMES_Y);
         roll(canvas, oldBuf, newBuf, [winnerGamesX](const char *) { return winnerGamesX; }, GAMES_Y, progressBetween(t, 1.5, 1.9), 1, FACE_3X5);
     }
     if (t >= 1.5 && t < 1.7) {
