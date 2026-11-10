@@ -171,7 +171,7 @@ static void games(Canvas &canvas, const Board &board)
     text3x5(canvas, buf, GAMES_RIGHT_X, GAMES_Y);
 }
 
-static void setPosts(Canvas &canvas)
+static void tallyPosts(Canvas &canvas)
 {
     for (int y = 9; y < 16; y++) {
         canvas.set(2, y);
@@ -179,9 +179,9 @@ static void setPosts(Canvas &canvas)
     }
 }
 
-// Set cell setIndex (0 = first set won, lower; 1 = second, upper) against
+// The tally cell for set setIndex (0 = first set won, lower; 1 = second, upper) against
 // edge x0, grown to `rows` of its 4 rows from the bottom.
-static void setCell(Canvas &canvas, int x0, int setIndex, int rows = 4)
+static void tallyCell(Canvas &canvas, int x0, int setIndex, int rows = 4)
 {
     int bottom = setIndex ? 12 : 16;
     for (int y = bottom - rows; y < bottom; y++) {
@@ -192,12 +192,12 @@ static void setCell(Canvas &canvas, int x0, int setIndex, int rows = 4)
 
 static void setsTally(Canvas &canvas, int leftSets, int rightSets, int rows = 4)
 {
-    setPosts(canvas);
+    tallyPosts(canvas);
     for (int i = 0; i < leftSets; i++) {
-        setCell(canvas, 0, i, rows);
+        tallyCell(canvas, 0, i, rows);
     }
     for (int i = 0; i < rightSets; i++) {
-        setCell(canvas, 30, i, rows);
+        tallyCell(canvas, 30, i, rows);
     }
 }
 
