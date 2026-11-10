@@ -107,12 +107,12 @@ static int s_frame_len;
 
 static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us);
 
-static bool is_bit(const rmt_symbol_word_t *s, uint32_t *period, uint32_t *shrt, bool *one)
+static bool is_bit(const rmt_symbol_word_t *sym, uint32_t *period, uint32_t *shrt, bool *one)
 {
-    if (s->level0 != 1 || s->level1 != 0 || !s->duration0 || !s->duration1) {
+    if (sym->level0 != 1 || sym->level1 != 0 || !sym->duration0 || !sym->duration1) {
         return false;
     }
-    uint32_t hi = s->duration0, lo = s->duration1;
+    uint32_t hi = sym->duration0, lo = sym->duration1;
     uint32_t sh = hi < lo ? hi : lo;
     uint32_t lg = hi < lo ? lo : hi;
     if (sh < MIN_PULSE_US || sh > MAX_PULSE_US || lg * 10 < sh * MIN_RATIO_X10) {
@@ -132,26 +132,26 @@ static bool near(uint32_t period, uint32_t ref)
 // Median bit period of the last few symbols that are bits.
 static uint32_t frame_period(void)
 {
-    uint32_t p[PERIOD_SAMPLES];
-    int n = 0;
-    for (int i = s_frame_len - 1; i >= 0 && n < PERIOD_SAMPLES; i--) {
+    uint32_t periods[PERIOD_SAMPLES];
+    int count = 0;
+    for (int i = s_frame_len - 1; i >= 0 && count < PERIOD_SAMPLES; i--) {
         uint32_t period, sh;
         bool one;
         if (is_bit(&s_frame[i], &period, &sh, &one)) {
-            p[n++] = period;
+            periods[count++] = period;
         }
     }
-    if (n < 3) {
+    if (count < 3) {
         return 0;
     }
-    for (int i = 1; i < n; i++) { // insertion sort, n <= 8
-        for (int j = i; j > 0 && p[j - 1] > p[j]; j--) {
-            uint32_t t = p[j];
-            p[j] = p[j - 1];
-            p[j - 1] = t;
+    for (int i_insert = 1; i_insert < count; i_insert++) { // insertion sort, count <= 8
+        for (int i_slot = i_insert; i_slot > 0 && periods[i_slot - 1] > periods[i_slot]; i_slot--) {
+            uint32_t tmp = periods[i_slot];
+            periods[i_slot] = periods[i_slot - 1];
+            periods[i_slot - 1] = tmp;
         }
     }
-    return p[n / 2];
+    return periods[count / 2];
 }
 
 typedef struct {
@@ -166,13 +166,13 @@ typedef struct {
 // bits of period `ref`, or `max_bits` bits.
 static segment_t decode_segment(int from, uint32_t ref, int max_bits)
 {
-    segment_t g = { 0 };
+    segment_t seg = { 0 };
     int i = from;
 
-    while (i >= 0 && g.bits < max_bits) {
+    while (i >= 0 && seg.bits < max_bits) {
         uint32_t period, sh;
         bool one;
-        int n = 1; // bits this step produces
+        int step_bits = 1; // bits this step produces
 
         if (is_bit(&s_frame[i], &period, &sh, &one) && near(period, ref)) {
             i--;
@@ -192,13 +192,13 @@ static segment_t decode_segment(int from, uint32_t ref, int max_bits)
             // following bit(s), merging their lows into this symbol, which is
             // then a whole number of bit periods long. Missed highs are the
             // short ones, so the hidden bits are 0s.
-            const rmt_symbol_word_t *m = &s_frame[i];
-            if (!ok && m->level0 == 1 && m->level1 == 0 && m->duration1) {
-                uint32_t len = m->duration0 + m->duration1;
-                for (n = 2; n <= MAX_MISSED + 1; n++) {
-                    if (near(len, ref * n) && g.bits + n <= max_bits) {
-                        one = m->duration0 * 2 > ref;
-                        sh = one ? ref / 4 : m->duration0;
+            const rmt_symbol_word_t *sym = &s_frame[i];
+            if (!ok && sym->level0 == 1 && sym->level1 == 0 && sym->duration1) {
+                uint32_t len = sym->duration0 + sym->duration1;
+                for (step_bits = 2; step_bits <= MAX_MISSED + 1; step_bits++) {
+                    if (near(len, ref * step_bits) && seg.bits + step_bits <= max_bits) {
+                        one = sym->duration0 * 2 > ref;
+                        sh = one ? ref / 4 : sym->duration0;
                         i--;
                         ok = true;
                         break;
@@ -208,31 +208,31 @@ static segment_t decode_segment(int from, uint32_t ref, int max_bits)
             if (!ok) {
                 break;
             }
-            g.repairs++;
+            seg.repairs++;
         }
 
-        if (n > 1) {
-            g.bits += n - 1; // the hidden 0s come after this bit; walking backwards they come first
-            g.short_sum += sh * (n - 1);
+        if (step_bits > 1) {
+            seg.bits += step_bits - 1; // the hidden 0s come after this bit; walking backwards they come first
+            seg.short_sum += sh * (step_bits - 1);
         }
-        g.code |= (uint32_t)one << g.bits;
-        g.short_sum += sh;
-        g.bits++;
-        n = 1;
+        seg.code |= (uint32_t)one << seg.bits;
+        seg.short_sum += sh;
+        seg.bits++;
+        step_bits = 1;
     }
-    g.stop = i;
-    return g;
+    seg.stop = i;
+    return seg;
 }
 
-static void log_segment(const char *what, const segment_t *g, int from, uint32_t ref)
+static void log_segment(const char *what, const segment_t *seg, int from, uint32_t ref)
 {
 #if CONFIG_RX433_LOG_FRAMES
     static char line[FRAME_BUF * 12]; // static: too big for the task stack
-    int n = 0;
-    for (int k = g->stop + 1; k <= from && n < (int)sizeof(line) - 12; k++) {
-        n += snprintf(line + n, sizeof(line) - n, "%u/%u ", s_frame[k].duration0, s_frame[k].duration1);
+    int len = 0;
+    for (int i = seg->stop + 1; i <= from && len < (int)sizeof(line) - 12; i++) {
+        len += snprintf(line + len, sizeof(line) - len, "%u/%u ", s_frame[i].duration0, s_frame[i].duration1);
     }
-    ESP_LOGI(TAG, "%s %d bits period=%lu repairs=%d: %s", what, g->bits, (unsigned long)ref, g->repairs, line);
+    ESP_LOGI(TAG, "%s %d bits period=%lu repairs=%d: %s", what, seg->bits, (unsigned long)ref, seg->repairs, line);
 #endif
 }
 
@@ -274,12 +274,12 @@ static void frame_decode(void)
     }
 }
 
-static void frame_feed(const rmt_symbol_word_t *s)
+static void frame_feed(const rmt_symbol_word_t *sym)
 {
     // Idle marker, the final high pulse the idle threshold cut off, or a
     // sync gap: decode what came before. None of them is a data bit.
-    bool gap = s->val == GAP_MARKER || (s->level0 == 1 && s->duration1 == 0) ||
-               (s->level1 == 0 && s->duration1 >= SYNC_MIN_US);
+    bool gap = sym->val == GAP_MARKER || (sym->level0 == 1 && sym->duration1 == 0) ||
+               (sym->level1 == 0 && sym->duration1 >= SYNC_MIN_US);
     if (gap) {
         frame_decode();
         s_frame_len = 0;
@@ -289,7 +289,7 @@ static void frame_feed(const rmt_symbol_word_t *s)
         memmove(s_frame, s_frame + FRAME_BUF / 2, (FRAME_BUF / 2) * sizeof(s_frame[0]));
         s_frame_len = FRAME_BUF / 2;
     }
-    s_frame[s_frame_len++] = *s;
+    s_frame[s_frame_len++] = *sym;
 }
 
 /* ---------- press tracking ---------- */
@@ -322,14 +322,14 @@ static TickType_t s_pressed_at;
 static bool s_long_sent;   // LONG already emitted for the current press
 static seen_t s_known[KNOWN_CODES]; // confirmed codes, most recent first
 
-static void emit(rx433_event_type_t type, const seen_t *f, uint16_t pulse_us)
+static void emit(rx433_event_type_t type, const seen_t *seen, uint16_t pulse_us)
 {
     rx433_event_t ev = {
         .type = type,
-        .code = f->code,
-        .bits = f->bits,
+        .code = seen->code,
+        .bits = seen->bits,
         .pulse_us = pulse_us,
-        .held_ms = type == RX433_EVENT_PRESS ? 0 : pdTICKS_TO_MS(f->at - s_pressed_at),
+        .held_ms = type == RX433_EVENT_PRESS ? 0 : pdTICKS_TO_MS(seen->at - s_pressed_at),
     };
     s_cfg.callback(&ev, s_cfg.user_ctx);
 }
@@ -347,14 +347,14 @@ static bool is_part_of(uint32_t part, uint8_t part_bits, const seen_t *full)
            (full->code >> (full->bits - part_bits)) == part;   // start of the code
 }
 
-static void remember(const seen_t *f)
+static void remember(const seen_t *seen)
 {
     int i = 0;
-    while (i < KNOWN_CODES - 1 && s_known[i].valid && (s_known[i].code != f->code || s_known[i].bits != f->bits)) {
+    while (i < KNOWN_CODES - 1 && s_known[i].valid && (s_known[i].code != seen->code || s_known[i].bits != seen->bits)) {
         i++;
     }
     memmove(&s_known[1], &s_known[0], i * sizeof(s_known[0])); // move to front, dropping the oldest
-    s_known[0] = *f;
+    s_known[0] = *seen;
     s_known[0].valid = true;
 }
 
@@ -383,14 +383,14 @@ static bool is_known(uint32_t code, uint8_t bits)
     return false;
 }
 
-static void pressed(const seen_t *f, uint16_t pulse_us, TickType_t now)
+static void pressed(const seen_t *seen, uint16_t pulse_us, TickType_t now)
 {
-    if (s_held.valid && (s_held.code != f->code || s_held.bits != f->bits)) {
+    if (s_held.valid && (s_held.code != seen->code || s_held.bits != seen->bits)) {
         emit(RX433_EVENT_RELEASE, &s_held, 0);
         s_held.valid = false;
     }
     if (!s_held.valid) {
-        s_held = *f;
+        s_held = *seen;
         s_held.valid = true;
         s_pressed_at = now;
         s_long_sent = false;
@@ -414,7 +414,7 @@ static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
     bool recent = s_candidate.valid && now - s_candidate.at <= pdMS_TO_TICKS(CONFIRM_MS);
 
     if (full) {
-        seen_t f = { .code = code, .bits = bits, .at = now, .valid = true };
+        seen_t seen = { .code = code, .bits = bits, .at = now, .valid = true };
         bool confirmed = is_known(code, bits) ||
                          (recent && s_candidate.code == code && s_candidate.bits == bits);
 #if CONFIG_RX433_LOG_FRAMES
@@ -422,9 +422,9 @@ static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
 #endif
         if (confirmed) {
             s_candidate.valid = false;
-            pressed(&f, pulse_us, now);
+            pressed(&seen, pulse_us, now);
         } else {
-            s_candidate = f;
+            s_candidate = seen;
         }
         return;
     }
@@ -445,9 +445,9 @@ static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
              match ? "matched" : "no match");
 #endif
     if (match) {
-        seen_t f = *match;
+        seen_t seen = *match;
         s_candidate.valid = false;
-        pressed(&f, pulse_us, now);
+        pressed(&seen, pulse_us, now);
     }
 }
 
@@ -466,8 +466,8 @@ static void rx_task(void *arg)
     rmt_symbol_word_t buf[32];
 
     while (true) {
-        size_t n = xStreamBufferReceive(s_stream, buf, sizeof(buf), pdMS_TO_TICKS(50));
-        for (size_t i = 0; i < n / sizeof(buf[0]); i++) {
+        size_t received = xStreamBufferReceive(s_stream, buf, sizeof(buf), pdMS_TO_TICKS(50));
+        for (size_t i = 0; i < received / sizeof(buf[0]); i++) {
             frame_feed(&buf[i]);
         }
         check_release();

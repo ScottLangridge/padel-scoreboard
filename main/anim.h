@@ -28,54 +28,54 @@ constexpr double SWAP_AFTER_PRESS_S = 0.9, BIND_AFTER_PRESS_S = 0.6, SERVE_AFTER
 constexpr double BIND_WIPE_IN_S = 0.35;
 
 // The resting board (SPEC §2). Nothing on it moves.
-void drawBoard(Canvas &c, const Board &s);
+void drawBoard(Canvas &canvas, const Board &board);
 
 // Point to `side` (§5.4): ball toward the winner, that side's points roll up,
-// serve flips. a = before, b = after.
-void animPoint(Canvas &c, double t, const Board &a, const Board &b, int side);
+// serve flips. from = before, to = after.
+void animPoint(Canvas &canvas, double t, const Board &from, const Board &to, int side);
 
 // The point that makes it 40-40 (§5.6): a Point, then the dash stands up,
 // splits and sweeps GOLDEN in. GOLDEN then stays on the resting board.
-void animGolden(Canvas &c, double t, const Board &a, const Board &b, int side);
+void animGolden(Canvas &canvas, double t, const Board &from, const Board &to, int side);
 
 // Undo (§5.4): the line rewinds, the points row is tugged back and rolls
-// down to the restored values. a = before the undo, b = restored.
-void animUndo(Canvas &c, double t, const Board &a, const Board &b);
+// down to the restored values. from = before the undo, to = restored.
+void animUndo(Canvas &canvas, double t, const Board &from, const Board &to);
 
 // Game won by `winner` (§5.5): points slide off, GAME drops in, the games
 // digit rolls, the new points wipe in.
-void animGame(Canvas &c, double t, const Board &a, const Board &b, int winner);
+void animGame(Canvas &canvas, double t, const Board &from, const Board &to, int winner);
 
 // Set won (§5.5): the panel floods from the winner's edge, SET and the set
 // score are punched out, the flood drains to reveal the new board.
-void animSet(Canvas &c, double t, const Board &a, const Board &b, int winner);
+void animSet(Canvas &canvas, double t, const Board &from, const Board &to, int winner);
 
 // Match won (§5.5): the board dissolves, MATCH drops in, fireworks, then the
 // final score (3x5, e.g. "6-4 6-3") wipes in and stays. Holds for ever; pass
 // elapsed time.
-void animMatch(Canvas &c, double t, const Board &a, int winner, const char *finalScore);
+void animMatch(Canvas &canvas, double t, const Board &from, int winner, const char *finalScore);
 
 // Swap ends (§5.7): the board folds into the centre, SWAP / ENDS waits for
-// the press at pressT, then the board emerges mirrored (b). Ends at
+// the press at pressT, then the board emerges mirrored (to). Ends at
 // pressT + SWAP_AFTER_PRESS_S.
-void animSwap(Canvas &c, double t, const Board &a, const Board &b, double pressT);
+void animSwap(Canvas &canvas, double t, const Board &from, const Board &to, double pressT);
 
 // Bind controllers (§5.2): PRESS / LEFT until pressL, wipe, PRESS / RIGHT
 // until pressR, wipe into the Select Serve prompt. Ends at
 // pressR + BIND_AFTER_PRESS_S; continue with animServe on a clock starting
 // there, so the prompt reads SELECT before SERVE.
-void animBind(Canvas &c, double t, double pressL, double pressR);
+void animBind(Canvas &canvas, double t, double pressL, double pressR);
 
 // Select serve (§5.3): SELECT / SERVE until pressT from `side`. The prompt
 // rolls away, that side's arrowhead glides to the centre and becomes the serve
 // triangle (side's first-serve box `box`), and the rest of the fresh board
 // emerges from the centre around it. Ends at pressT + SERVE_AFTER_PRESS_S.
-void animServe(Canvas &c, double t, double pressT, int side, int box);
+void animServe(Canvas &canvas, double t, double pressT, int side, int box);
 
 // The hand-over from the splash (§5.1): masks the Bind screen so it wipes in
 // from the dividing line outward over the first BIND_WIPE_IN_S seconds.
-void bindWipeIn(Canvas &c, double t);
+void bindWipeIn(Canvas &canvas, double t);
 
 // Draws the fixed frame showing at time t of a 30 fps clip (held on the last
 // frame past the end). Returns false once t is past the end.
-bool drawFixed(Canvas &c, const FixedFrame *frames, int count, double t);
+bool drawFixed(Canvas &canvas, const FixedFrame *frames, int count, double t);

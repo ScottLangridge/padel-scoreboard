@@ -23,9 +23,9 @@ void Match::point(int team)
             winGame(team);
             return;
         }
-        // Point n (0-based) is served by tb_first when n is 0, 3, 4, 7, 8...
-        int n = s_.points[0] + s_.points[1];
-        s_.server = ((n + 1) / 2) % 2 ? 1 - s_.tb_first : s_.tb_first;
+        // Point `played` (0-based) is served by tb_first when it is 0, 3, 4, 7, 8...
+        int played = s_.points[0] + s_.points[1];
+        s_.server = ((played + 1) / 2) % 2 ? 1 - s_.tb_first : s_.tb_first;
         return;
     }
 
@@ -52,9 +52,9 @@ void Match::winGame(int team)
     bool set_won = (s_.games[team] >= GAMES_PER_SET && s_.games[team] - s_.games[other] >= 2) ||
                    s_.games[team] == GAMES_PER_SET + 1; // 7-6 after a tiebreak
     if (set_won) {
-        int n = s_.sets[0] + s_.sets[1];
-        s_.set_games[n][0] = s_.games[0];
-        s_.set_games[n][1] = s_.games[1];
+        int set_index = s_.sets[0] + s_.sets[1];
+        s_.set_games[set_index][0] = s_.games[0];
+        s_.set_games[set_index][1] = s_.games[1];
         s_.sets[team]++;
         s_.games[0] = s_.games[1] = 0;
         if (s_.sets[team] == SETS_TO_WIN) {

@@ -71,11 +71,11 @@ static int team_of(uint32_t code)
     return -1;
 }
 
-static void push(const Canvas &c)
+static void push(const Canvas &frame)
 {
     for (int y = 0; y < Canvas::H; y++) {
         for (int x = 0; x < Canvas::W; x++) {
-            back.setPixel(x, y, c.get(x, y) ? GRAPHICS_ON : GRAPHICS_OFF);
+            back.setPixel(x, y, frame.get(x, y) ? GRAPHICS_ON : GRAPHICS_OFF);
         }
     }
     dmd.copyFrame(back, 0, 0);
@@ -150,30 +150,30 @@ static int serve_box(int sv, int played)
 
 // The score as laid out on the panel: Board side 0 is the left half. Team 0
 // starts on the left and the sides mirror on every change of ends.
-static Board board_of(const Score &s, bool swapped)
+static Board board_of(const Score &score, bool swapped)
 {
-    int l = swapped ? 1 : 0, r = 1 - l;
-    Board b;
-    b.pts[0] = s.points[l];
-    b.pts[1] = s.points[r];
-    b.tiebreak = s.tiebreak;
-    b.games[0] = s.games[l];
-    b.games[1] = s.games[r];
-    b.sets[0] = s.sets[l];
-    b.sets[1] = s.sets[r];
-    b.sv = s.server == l ? 0 : 1;
-    b.bx = serve_box(b.sv, s.points[0] + s.points[1]);
-    return b;
+    int left = swapped ? 1 : 0, right = 1 - left;
+    Board board;
+    board.pts[0] = score.points[left];
+    board.pts[1] = score.points[right];
+    board.tiebreak = score.tiebreak;
+    board.games[0] = score.games[left];
+    board.games[1] = score.games[right];
+    board.sets[0] = score.sets[left];
+    board.sets[1] = score.sets[right];
+    board.sv = score.server == left ? 0 : 1;
+    board.bx = serve_box(board.sv, score.points[0] + score.points[1]);
+    return board;
 }
 
 static void show_board()
 {
-    const Score &s = match.score();
-    ESP_LOGI(TAG, "sets %u-%u games %u-%u points %u-%u%s serve %c%s", s.sets[0], s.sets[1], s.games[0], s.games[1],
-             s.points[0], s.points[1], s.tiebreak ? " (tiebreak)" : "", 'A' + s.server,
-             s.endsSwapped() ? " [A on the right]" : "");
+    const Score &score = match.score();
+    ESP_LOGI(TAG, "sets %u-%u games %u-%u points %u-%u%s serve %c%s", score.sets[0], score.sets[1], score.games[0],
+             score.games[1], score.points[0], score.points[1], score.tiebreak ? " (tiebreak)" : "", 'A' + score.server,
+             score.endsSwapped() ? " [A on the right]" : "");
     canvas.clear();
-    drawBoard(canvas, board_of(s, s.endsSwapped()));
+    drawBoard(canvas, board_of(score, score.endsSwapped()));
     push(canvas);
 }
 
@@ -181,15 +181,15 @@ static void show_board()
 // doesn't bind anything.
 static void splash()
 {
-    static const int N = sizeof(SPLASH) / sizeof(SPLASH[0]);
+    static const int SPLASH_COUNT = sizeof(SPLASH) / sizeof(SPLASH[0]);
     double length = 0;
-    for (const FixedFrame &f : SPLASH) {
-        length += f.ms / 1000.0;
+    for (const FixedFrame &frame : SPLASH) {
+        length += frame.ms / 1000.0;
     }
     Clock clk;
     bool skipped = false;
     run(
-        clk, [](Canvas &c, double t) { drawFixed(c, SPLASH, N, t); },
+        clk, [](Canvas &canvas, double t) { drawFixed(canvas, SPLASH, SPLASH_COUNT, t); },
         [&](double, const rx433_event_t &ev) {
             if (ev.type == RX433_EVENT_PRESS) {
                 ESP_LOGI(TAG, "splash skipped");
@@ -207,9 +207,9 @@ static void bind(const Clock &clk)
     ESP_LOGI(TAG, "bind: press the left remote");
     run(
         clk,
-        [&](Canvas &c, double t) {
-            animBind(c, t, pressL, pressR);
-            bindWipeIn(c, t);
+        [&](Canvas &canvas, double t) {
+            animBind(canvas, t, pressL, pressR);
+            bindWipeIn(canvas, t);
         },
         [&](double t, const rx433_event_t &ev) {
             if (ev.type != RX433_EVENT_PRESS) {
@@ -241,7 +241,7 @@ static int select_serve(const Clock &clk)
     int side = 0;
     ESP_LOGI(TAG, "select serve: press a remote");
     run(
-        clk, [&](Canvas &c, double t) { animServe(c, t, pressT, side, serve_box(side, 0)); },
+        clk, [&](Canvas &canvas, double t) { animServe(canvas, t, pressT, side, serve_box(side, 0)); },
         [&](double t, const rx433_event_t &ev) {
             int team = team_of(ev.code);
             if (ev.type == RX433_EVENT_PRESS && pressT == INF && team >= 0) {
@@ -257,13 +257,13 @@ static int select_serve(const Clock &clk)
 // Swap ends (SPEC §5.7): the board folds away, the prompt waits for a press
 // from either bound remote (the acknowledgement; it doesn't score), the
 // board emerges mirrored.
-static void swap_ends(const Board &a, const Board &b)
+static void swap_ends(const Board &from, const Board &to)
 {
     ESP_LOGI(TAG, "swap ends");
     Clock clk;
     double pressT = INF;
     run(
-        clk, [&](Canvas &c, double t) { animSwap(c, t, a, b, pressT); },
+        clk, [&](Canvas &canvas, double t) { animSwap(canvas, t, from, to, pressT); },
         [&](double t, const rx433_event_t &ev) {
             if (ev.type == RX433_EVENT_PRESS && pressT == INF && t >= 0.5 && team_of(ev.code) >= 0) {
                 pressT = t;
@@ -274,18 +274,18 @@ static void swap_ends(const Board &a, const Board &b)
 
 // Match won (SPEC §5.5): plays once and holds the final score until power
 // is cycled. Never returns; remote presses are ignored.
-[[noreturn]] static void match_over(const Board &a, int side, const Score &s)
+[[noreturn]] static void match_over(const Board &from, int side, const Score &score)
 {
     char final_score[16] = ""; // each set's games, winner's first
-    int w = s.winner;
-    for (int i = 0; i < s.sets[0] + s.sets[1]; i++) {
+    int winner = score.winner;
+    for (int i = 0; i < score.sets[0] + score.sets[1]; i++) {
         snprintf(final_score + strlen(final_score), sizeof final_score - strlen(final_score), "%s%d-%d", i ? " " : "",
-                 s.set_games[i][w], s.set_games[i][1 - w]);
+                 score.set_games[i][winner], score.set_games[i][1 - winner]);
     }
-    ESP_LOGI(TAG, "match: team %c wins %s", 'A' + w, final_score);
+    ESP_LOGI(TAG, "match: team %c wins %s", 'A' + winner, final_score);
     Clock clk;
     run(
-        clk, [&](Canvas &c, double t) { animMatch(c, t, a, side, final_score); },
+        clk, [&](Canvas &canvas, double t) { animMatch(canvas, t, from, side, final_score); },
         [](double, const rx433_event_t &) {}, true, [](double) { return false; });
     for (;;) {
         vTaskDelay(portMAX_DELAY);
@@ -301,22 +301,22 @@ static void scored(int team)
     int side = sw ? 1 - team : team;
     match.point(team);
     const Score &after = match.score();
-    Board a = board_of(before, sw), b = board_of(after, sw);
+    Board from = board_of(before, sw), to = board_of(after, sw);
 
     if (after.winner >= 0) {
-        match_over(a, side, after);
+        match_over(from, side, after);
     }
     if (after.sets[team] != before.sets[team]) {
-        play([&](Canvas &c, double t) { animSet(c, t, a, b, side); }, SET_S);
+        play([&](Canvas &canvas, double t) { animSet(canvas, t, from, to, side); }, SET_S);
     } else if (after.games[team] != before.games[team]) {
-        play([&](Canvas &c, double t) { animGame(c, t, a, b, side); }, GAME_S);
+        play([&](Canvas &canvas, double t) { animGame(canvas, t, from, to, side); }, GAME_S);
     } else if (after.golden()) {
-        play([&](Canvas &c, double t) { animGolden(c, t, a, b, side); }, GOLDEN_S);
+        play([&](Canvas &canvas, double t) { animGolden(canvas, t, from, to, side); }, GOLDEN_S);
     } else {
-        play([&](Canvas &c, double t) { animPoint(c, t, a, b, side); }, POINT_S);
+        play([&](Canvas &canvas, double t) { animPoint(canvas, t, from, to, side); }, POINT_S);
     }
     if (after.swaps != before.swaps) {
-        swap_ends(b, board_of(after, !sw));
+        swap_ends(to, board_of(after, !sw));
     }
     show_board();
 }
@@ -331,8 +331,8 @@ static void undo()
         return;
     }
     ESP_LOGI(TAG, "undo");
-    Board a = board_of(before, sw), b = board_of(match.score(), sw);
-    play([&](Canvas &c, double t) { animUndo(c, t, a, b); }, UNDO_S);
+    Board from = board_of(before, sw), to = board_of(match.score(), sw);
+    play([&](Canvas &canvas, double t) { animUndo(canvas, t, from, to); }, UNDO_S);
     show_board();
 }
 

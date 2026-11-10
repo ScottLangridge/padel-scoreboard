@@ -15,9 +15,9 @@ struct FixedFrame {
 
 // JavaScript's Math.round (halves go up), which the reference code uses for
 // every pixel position.
-inline int jsround(double v)
+inline int jsround(double value)
 {
-    return (int)floor(v + 0.5);
+    return (int)floor(value + 0.5);
 }
 
 struct Canvas {
@@ -28,8 +28,8 @@ struct Canvas {
 
     void clear()
     {
-        for (auto &r : rows) {
-            r = 0;
+        for (auto &row : rows) {
+            row = 0;
         }
         noClip();
     }
@@ -73,12 +73,12 @@ struct Canvas {
         cy1 = y1 < cy1 ? y1 : cy1;
         return old;
     }
-    void popClip(const ClipState &s)
+    void popClip(const ClipState &saved)
     {
-        cx0 = s.x0;
-        cx1 = s.x1;
-        cy0 = s.y0;
-        cy1 = s.y1;
+        cx0 = saved.x0;
+        cx1 = saved.x1;
+        cy0 = saved.y0;
+        cy1 = saved.y1;
     }
     void noClip() { popClip({0, W - 1, 0, H - 1}); }
 };

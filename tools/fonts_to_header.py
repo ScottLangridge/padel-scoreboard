@@ -34,8 +34,8 @@ def main(src, out):
         "",
     ]
     for key, cname, w, h in FONTS:
-        f = fonts[key]
-        glyphs = f["glyphs"]
+        font = fonts[key]
+        glyphs = font["glyphs"]
         lines.append(f"static const uint8_t {cname}_GLYPHS[96][7] = {{")
         for code in range(32, 128):
             ch = chr(code)
@@ -43,17 +43,17 @@ def main(src, out):
             if rows is None:
                 lines.append("    {0},")
                 continue
-            assert len(rows) == h and all(len(r) == w for r in rows), (key, ch)
+            assert len(rows) == h and all(len(row) == w for row in rows), (key, ch)
             vals = []
-            for r in rows:
-                v = 0
-                for i, c in enumerate(r):
-                    if c == "#":
-                        v |= 1 << (w - 1 - i)
-                vals.append(f"0x{v:02x}")
+            for row in rows:
+                bits = 0
+                for i_col, pixel in enumerate(row):
+                    if pixel == "#":
+                        bits |= 1 << (w - 1 - i_col)
+                vals.append(f"0x{bits:02x}")
             lines.append(f"    {{{', '.join(vals)}}}, // '{ch}'")
         lines.append("};")
-        lines.append(f"static const Font {cname} = {{{w}, {h}, {f['advance']}, {cname}_GLYPHS}};")
+        lines.append(f"static const Font {cname} = {{{w}, {h}, {font['advance']}, {cname}_GLYPHS}};")
         lines.append("")
     with open(out, "w") as fh:
         fh.write("\n".join(lines))

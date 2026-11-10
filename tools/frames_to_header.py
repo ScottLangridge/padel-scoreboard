@@ -23,12 +23,12 @@ def main(src, out, name, cutoff=None):
     kept = []
     count = 0
     for fr in frames:
-        n = round(fr["ms"] * fps / 1000)
+        ticks = round(fr["ms"] * fps / 1000)
         if limit is not None:
-            n = min(n, limit - count)
-        if n <= 0:
+            ticks = min(ticks, limit - count)
+        if ticks <= 0:
             break
-        start, end = count, count + n
+        start, end = count, count + ticks
         kept.append((round(end * 1000 / fps) - round(start * 1000 / fps), fr["hex"]))
         count = end
     cum = round(count * 1000 / fps)
@@ -38,7 +38,7 @@ def main(src, out, name, cutoff=None):
         fh.write(f"static const FixedFrame {name}[] = {{\n")
         for ms, hx in kept:
             rows = [int(hx[y * 8:(y + 1) * 8], 16) for y in range(16)]
-            fh.write(f"    {{{ms}, {{" + ", ".join(f"0x{r:08x}" for r in rows) + "}},\n")
+            fh.write(f"    {{{ms}, {{" + ", ".join(f"0x{row:08x}" for row in rows) + "}},\n")
         fh.write("};\n")
     print(f"{out}: {len(kept)} frames, {cum} ms")
 

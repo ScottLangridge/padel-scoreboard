@@ -33,21 +33,21 @@ public:
             digitalWrite(pin, LOW);
         }
 
-        ledc_timer_config_t t = {};
-        t.speed_mode = LEDC_LOW_SPEED_MODE;
-        t.duty_resolution = LEDC_TIMER_8_BIT;
-        t.timer_num = OE_TIMER;
-        t.freq_hz = 20000; // many PWM cycles per row period
-        t.clk_cfg = LEDC_AUTO_CLK;
-        ESP_ERROR_CHECK(ledc_timer_config(&t));
+        ledc_timer_config_t timer_config = {};
+        timer_config.speed_mode = LEDC_LOW_SPEED_MODE;
+        timer_config.duty_resolution = LEDC_TIMER_8_BIT;
+        timer_config.timer_num = OE_TIMER;
+        timer_config.freq_hz = 20000; // many PWM cycles per row period
+        timer_config.clk_cfg = LEDC_AUTO_CLK;
+        ESP_ERROR_CHECK(ledc_timer_config(&timer_config));
 
-        ledc_channel_config_t c = {};
-        c.gpio_num = CONFIG_LED_MATRIX_GPIO_OE;
-        c.speed_mode = LEDC_LOW_SPEED_MODE;
-        c.channel = OE_CHANNEL;
-        c.timer_sel = OE_TIMER;
-        c.duty = 0;
-        ESP_ERROR_CHECK(ledc_channel_config(&c));
+        ledc_channel_config_t channel_config = {};
+        channel_config.gpio_num = CONFIG_LED_MATRIX_GPIO_OE;
+        channel_config.speed_mode = LEDC_LOW_SPEED_MODE;
+        channel_config.channel = OE_CHANNEL;
+        channel_config.timer_sel = OE_TIMER;
+        channel_config.duty = 0;
+        ESP_ERROR_CHECK(ledc_channel_config(&channel_config));
 
         clearScreen();
 

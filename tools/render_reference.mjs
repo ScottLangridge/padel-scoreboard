@@ -30,44 +30,44 @@ if (start < "<script>".length || end < 0) {
     throw new Error("could not find the script section");
 }
 const driver = `
-    return CLIPS.map((c, i) => {
+    return CLIPS.map((clip, i) => {
         clipIdx = i;
-        const n = Math.ceil(c.dur * ${FPS} - 1e-9) + 1;   // one frame past the end, like the page
+        const frameCount = Math.ceil(clip.dur * ${FPS} - 1e-9) + 1;   // one frame past the end, like the page
         const frames = [];
-        for (let f = 0; f < n; f++) {
-            animate(f, f / ${FPS});
+        for (let frame = 0; frame < frameCount; frame++) {
+            animate(frame, frame / ${FPS});
             let hex = "";
-            for (let k = 0; k < 128; k++) {
-                let v = 0;
-                for (let b = 0; b < 4; b++) v = v * 2 + (buf[k * 4 + b] > 0.5 ? 1 : 0);
-                hex += v.toString(16);
+            for (let i_nibble = 0; i_nibble < 128; i_nibble++) {
+                let nibble = 0;
+                for (let i_bit = 0; i_bit < 4; i_bit++) nibble = nibble * 2 + (buf[i_nibble * 4 + i_bit] > 0.5 ? 1 : 0);
+                hex += nibble.toString(16);
             }
             frames.push(hex);
         }
-        return { name: c.name, dur: c.dur, loopFrom: c.loopFrom ?? null, frames };
+        return { name: clip.name, dur: clip.dur, loopFrom: clip.loopFrom ?? null, frames };
     });`;
 const clips = new Function(html.slice(start, end) + "\n" + driver)();
 
-for (const c of clips) {
+for (const clip of clips) {
     const merged = [];
-    for (const hex of c.frames) {
+    for (const hex of clip.frames) {
         if (merged.length && merged[merged.length - 1].hex === hex) {
-            merged[merged.length - 1].n++;
+            merged[merged.length - 1].count++;
         } else {
-            merged.push({ hex, n: 1 });
+            merged.push({ hex, count: 1 });
         }
     }
     const json = {
-        name: c.name,
+        name: clip.name,
         width: 32,
         height: 16,
         fps_source: FPS,
-        duration_s: Math.round(c.dur * 100) / 100,
-        loop_from_s: c.loopFrom,
+        duration_s: Math.round(clip.dur * 100) / 100,
+        loop_from_s: clip.loopFrom,
         encoding: "hex: 128 hex chars = 512 bits, row-major from top-left, MSB first; 1 = LED on",
-        frames: merged.map(m => ({ ms: Math.round(m.n * 1000 / FPS), hex: m.hex })),
+        frames: merged.map(run => ({ ms: Math.round(run.count * 1000 / FPS), hex: run.hex })),
     };
-    const file = path.join(outDir, NAMES[c.name] + ".json");
+    const file = path.join(outDir, NAMES[clip.name] + ".json");
     fs.writeFileSync(file, JSON.stringify(json));
-    console.log(`${file}: ${c.frames.length} frames, ${merged.length} merged`);
+    console.log(`${file}: ${clip.frames.length} frames, ${merged.length} merged`);
 }

@@ -29,21 +29,21 @@ def rows(hx):
 
 
 def ascii(hx, on="#", off="."):
-    return [r.replace("1", on).replace("0", off) for r in rows(hx)]
+    return [row.replace("1", on).replace("0", off) for row in rows(hx)]
 
 
-def diff(a, b):
-    ra, rb = rows(a), rows(b)
-    return ["".join("-" if x == "1" and y == "0" else "+" if x == "0" and y == "1" else "." for x, y in zip(la, lb))
-            for la, lb in zip(ra, rb)]
+def diff(want_hex, got_hex):
+    return ["".join("-" if want_bit == "1" and got_bit == "0" else "+" if want_bit == "0" and got_bit == "1" else "."
+                    for want_bit, got_bit in zip(want_row, got_row))
+            for want_row, got_row in zip(rows(want_hex), rows(got_hex))]
 
 
 def check(renderer, frames_dir, clip):
     ref = json.load(open(os.path.join(frames_dir, clip + ".json")))
     want = expand(ref["frames"])
     got = subprocess.run([renderer, clip], check=True, capture_output=True, text=True).stdout.split()
-    n = min(len(want), len(got))
-    bad = next((i for i in range(n) if want[i] != got[i]), None)
+    compared = min(len(want), len(got))
+    bad = next((i for i in range(compared) if want[i] != got[i]), None)
     if bad is None and len(want) == len(got):
         print(f"PASS {clip:8s} {len(got)} frames")
         return True
@@ -51,17 +51,17 @@ def check(renderer, frames_dir, clip):
         print(f"FAIL {clip:8s} frame count: reference {len(want)}, port {len(got)}")
         return False
     print(f"FAIL {clip:8s} first difference at frame {bad} (t = {bad / FPS:.3f} s), "
-          f"{sum(want[i] != got[i] for i in range(n))} of {n} frames differ")
+          f"{sum(want[i] != got[i] for i in range(compared))} of {compared} frames differ")
     print(f"       {'reference':32s}  {'port':32s}  {'diff (- missing, + extra)'}")
-    for r, p, d in zip(ascii(want[bad]), ascii(got[bad]), diff(want[bad], got[bad])):
-        print(f"       {r}  {p}  {d}")
+    for want_row, got_row, diff_row in zip(ascii(want[bad]), ascii(got[bad]), diff(want[bad], got[bad])):
+        print(f"       {want_row}  {got_row}  {diff_row}")
     return False
 
 
 def main():
     renderer, frames_dir = sys.argv[1], sys.argv[2]
     clips = sys.argv[3:] or CLIPS
-    ok = all([check(renderer, frames_dir, c) for c in clips])
+    ok = all([check(renderer, frames_dir, clip) for clip in clips])
     sys.exit(0 if ok else 1)
 
 
