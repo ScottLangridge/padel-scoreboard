@@ -19,17 +19,17 @@ CLIPS = ["splash", "bind", "serve", "point-l", "point-r", "undo", "game", "set",
 
 def expand(frames):
     out = []
-    for fr in frames:
-        out.extend([fr["hex"]] * round(fr["ms"] * FPS / 1000))
+    for frame in frames:
+        out.extend([frame["hex"]] * round(frame["ms"] * FPS / 1000))
     return out
 
 
-def rows(hx):
-    return [format(int(hx[y * 8:(y + 1) * 8], 16), "032b") for y in range(16)]
+def rows(frame_hex):
+    return [format(int(frame_hex[y * 8:(y + 1) * 8], 16), "032b") for y in range(16)]
 
 
-def ascii(hx, on="#", off="."):
-    return [row.replace("1", on).replace("0", off) for row in rows(hx)]
+def ascii(frame_hex, on="#", off="."):
+    return [row.replace("1", on).replace("0", off) for row in rows(frame_hex)]
 
 
 def diff(want_hex, got_hex):
@@ -39,21 +39,21 @@ def diff(want_hex, got_hex):
 
 
 def check(renderer, frames_dir, clip):
-    ref = json.load(open(os.path.join(frames_dir, clip + ".json")))
-    want = expand(ref["frames"])
+    reference = json.load(open(os.path.join(frames_dir, clip + ".json")))
+    want = expand(reference["frames"])
     got = subprocess.run([renderer, clip], check=True, capture_output=True, text=True).stdout.split()
     compared = min(len(want), len(got))
-    bad = next((i for i in range(compared) if want[i] != got[i]), None)
-    if bad is None and len(want) == len(got):
+    first_bad = next((i for i in range(compared) if want[i] != got[i]), None)
+    if first_bad is None and len(want) == len(got):
         print(f"PASS {clip:8s} {len(got)} frames")
         return True
-    if bad is None:
+    if first_bad is None:
         print(f"FAIL {clip:8s} frame count: reference {len(want)}, port {len(got)}")
         return False
-    print(f"FAIL {clip:8s} first difference at frame {bad} (t = {bad / FPS:.3f} s), "
+    print(f"FAIL {clip:8s} first difference at frame {first_bad} (t = {first_bad / FPS:.3f} s), "
           f"{sum(want[i] != got[i] for i in range(compared))} of {compared} frames differ")
     print(f"       {'reference':32s}  {'port':32s}  {'diff (- missing, + extra)'}")
-    for want_row, got_row, diff_row in zip(ascii(want[bad]), ascii(got[bad]), diff(want[bad], got[bad])):
+    for want_row, got_row, diff_row in zip(ascii(want[first_bad]), ascii(got[first_bad]), diff(want[first_bad], got[first_bad])):
         print(f"       {want_row}  {got_row}  {diff_row}")
     return False
 

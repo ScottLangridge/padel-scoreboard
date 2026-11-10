@@ -47,10 +47,10 @@ static const char *TAG = "scoreboard";
 static constexpr uint32_t LONG_PRESS_MS = 1000;
 
 static constexpr int64_t FRAME_US = 1000000 / 30; // the design is authored at 30 fps
-static const double INF = INFINITY;                // "no press yet" for the prompts
+static const double NOT_PRESSED = INFINITY;                // "no press yet" for the prompts
 
-static Hub12 dmd;
-static DMDFrame back(32, 16); // drawn here, then copied, so a scan never sees a half-drawn frame
+static Hub12 panel;
+static DMDFrame back_buffer(32, 16); // drawn here, then copied, so a scan never sees a half-drawn frame
 static Canvas canvas;
 static Match match;
 static QueueHandle_t s_events;
@@ -71,14 +71,14 @@ static int team_of(uint32_t code)
     return -1;
 }
 
-static void push(const Canvas &frame)
+static void show_canvas(const Canvas &frame)
 {
     for (int y = 0; y < Canvas::H; y++) {
         for (int x = 0; x < Canvas::W; x++) {
-            back.setPixel(x, y, frame.get(x, y) ? GRAPHICS_ON : GRAPHICS_OFF);
+            back_buffer.setPixel(x, y, frame.get(x, y) ? GRAPHICS_ON : GRAPHICS_OFF);
         }
     }
-    dmd.copyFrame(back, 0, 0);
+    panel.copyFrame(back_buffer, 0, 0);
 }
 
 // Seconds since a screen started.
@@ -101,7 +101,7 @@ static void run(const Clock &clk, Render render, OnEvent on_event, bool events, 
         }
         canvas.clear();
         render(canvas, t);
-        push(canvas);
+        show_canvas(canvas);
 
         next += FRAME_US;
         while (true) {
@@ -134,14 +134,14 @@ static void play(Render render, double seconds)
         clk, render, [](double, const rx433_event_t &) {}, false, [seconds](double t) { return t >= seconds; });
 }
 
-// Service box (0 top, 1 bottom) for the team on panel side `sv` after
+// Service box (0 top, 1 bottom) for the team on panel side `serving_side` after
 // `played` points of the game: the first serve of a game is from the server's
 // right-hand box, then they alternate. Each team's right is on the opposite
 // side of the court; by default the top of the panel is the right-hand box of
 // the team on the right (menuconfig flips it for the other mounting).
-static int serve_box(int sv, int played)
+static int serve_box(int serving_side, int played)
 {
-    int box = (played % 2) ^ (sv == 0 ? 1 : 0);
+    int box = (played % 2) ^ (serving_side == 0 ? 1 : 0);
 #if CONFIG_SCOREBOARD_FLIP_SERVE_BOXES
     box ^= 1;
 #endif
@@ -161,8 +161,8 @@ static Board board_of(const Score &score, bool swapped)
     board.games[1] = score.games[right];
     board.sets[0] = score.sets[left];
     board.sets[1] = score.sets[right];
-    board.sv = score.server == left ? 0 : 1;
-    board.bx = serve_box(board.sv, score.points[0] + score.points[1]);
+    board.servingSide = score.server == left ? 0 : 1;
+    board.serveBox = serve_box(board.servingSide, score.points[0] + score.points[1]);
     return board;
 }
 
@@ -174,7 +174,7 @@ static void show_board()
              score.endsSwapped() ? " [A on the right]" : "");
     canvas.clear();
     drawBoard(canvas, board_of(score, score.endsSwapped()));
-    push(canvas);
+    show_canvas(canvas);
 }
 
 // Boot splash (SPEC §5.1). Any remote press skips the rest; that press
@@ -203,33 +203,33 @@ static void splash()
 // started: the screen wipes in around the dividing line, then waits.
 static void bind(const Clock &clk)
 {
-    double pressL = INF, pressR = INF;
+    double left_pressed_at = NOT_PRESSED, right_pressed_at = NOT_PRESSED;
     ESP_LOGI(TAG, "bind: press the left remote");
     run(
         clk,
         [&](Canvas &canvas, double t) {
-            animBind(canvas, t, pressL, pressR);
+            animBind(canvas, t, left_pressed_at, right_pressed_at);
             bindWipeIn(canvas, t);
         },
         [&](double t, const rx433_event_t &ev) {
             if (ev.type != RX433_EVENT_PRESS) {
                 return;
             }
-            if (pressL == INF) {
-                pressL = t;
+            if (left_pressed_at == NOT_PRESSED) {
+                left_pressed_at = t;
                 codes[0] = ev.code;
                 ESP_LOGI(TAG, "remote 0x%08lx is left (team A); press the right remote", (unsigned long)ev.code);
-            } else if (pressR == INF && t >= pressL + BIND_AFTER_PRESS_S) {
+            } else if (right_pressed_at == NOT_PRESSED && t >= left_pressed_at + BIND_AFTER_PRESS_S) {
                 if (ev.code == codes[0]) {
                     ESP_LOGI(TAG, "remote 0x%08lx is already left, press the other one", (unsigned long)ev.code);
                     return;
                 }
-                pressR = t;
+                right_pressed_at = t;
                 codes[1] = ev.code;
                 ESP_LOGI(TAG, "remote 0x%08lx is right (team B)", (unsigned long)ev.code);
             }
         },
-        true, [&](double t) { return t >= pressR + BIND_AFTER_PRESS_S; });
+        true, [&](double t) { return t >= right_pressed_at + BIND_AFTER_PRESS_S; });
 }
 
 // Select serve (SPEC §5.3), on a clock starting as Bind's last wipe ends so
@@ -237,20 +237,20 @@ static void bind(const Clock &clk)
 // yet) that serves first; ends with the fresh board on the panel.
 static int select_serve(const Clock &clk)
 {
-    double pressT = INF;
+    double pressed_at = NOT_PRESSED;
     int side = 0;
     ESP_LOGI(TAG, "select serve: press a remote");
     run(
-        clk, [&](Canvas &canvas, double t) { animServe(canvas, t, pressT, side, serve_box(side, 0)); },
+        clk, [&](Canvas &canvas, double t) { animServe(canvas, t, pressed_at, side, serve_box(side, 0)); },
         [&](double t, const rx433_event_t &ev) {
             int team = team_of(ev.code);
-            if (ev.type == RX433_EVENT_PRESS && pressT == INF && team >= 0) {
-                pressT = t;
+            if (ev.type == RX433_EVENT_PRESS && pressed_at == NOT_PRESSED && team >= 0) {
+                pressed_at = t;
                 side = team;
                 ESP_LOGI(TAG, "team %c serves first", 'A' + team);
             }
         },
-        true, [&](double t) { return t >= pressT + SERVE_AFTER_PRESS_S; });
+        true, [&](double t) { return t >= pressed_at + SERVE_AFTER_PRESS_S; });
     return side;
 }
 
@@ -261,15 +261,15 @@ static void swap_ends(const Board &from, const Board &to)
 {
     ESP_LOGI(TAG, "swap ends");
     Clock clk;
-    double pressT = INF;
+    double pressed_at = NOT_PRESSED;
     run(
-        clk, [&](Canvas &canvas, double t) { animSwap(canvas, t, from, to, pressT); },
+        clk, [&](Canvas &canvas, double t) { animSwap(canvas, t, from, to, pressed_at); },
         [&](double t, const rx433_event_t &ev) {
-            if (ev.type == RX433_EVENT_PRESS && pressT == INF && t >= 0.5 && team_of(ev.code) >= 0) {
-                pressT = t;
+            if (ev.type == RX433_EVENT_PRESS && pressed_at == NOT_PRESSED && t >= 0.5 && team_of(ev.code) >= 0) {
+                pressed_at = t;
             }
         },
-        true, [&](double t) { return t >= pressT + SWAP_AFTER_PRESS_S; });
+        true, [&](double t) { return t >= pressed_at + SWAP_AFTER_PRESS_S; });
 }
 
 // Match won (SPEC §5.5): plays once and holds the final score until power
@@ -297,11 +297,11 @@ static void swap_ends(const Board &from, const Board &to)
 static void scored(int team)
 {
     Score before = match.score();
-    bool sw = before.endsSwapped();
-    int side = sw ? 1 - team : team;
+    bool swapped = before.endsSwapped();
+    int side = swapped ? 1 - team : team;
     match.point(team);
     const Score &after = match.score();
-    Board from = board_of(before, sw), to = board_of(after, sw);
+    Board from = board_of(before, swapped), to = board_of(after, swapped);
 
     if (after.winner >= 0) {
         match_over(from, side, after);
@@ -316,7 +316,7 @@ static void scored(int team)
         play([&](Canvas &canvas, double t) { animPoint(canvas, t, from, to, side); }, POINT_S);
     }
     if (after.swaps != before.swaps) {
-        swap_ends(to, board_of(after, !sw));
+        swap_ends(to, board_of(after, !swapped));
     }
     show_board();
 }
@@ -326,12 +326,12 @@ static void scored(int team)
 static void undo()
 {
     Score before = match.score();
-    bool sw = before.endsSwapped();
+    bool swapped = before.endsSwapped();
     if (!match.undo()) {
         return;
     }
     ESP_LOGI(TAG, "undo");
-    Board from = board_of(before, sw), to = board_of(match.score(), sw);
+    Board from = board_of(before, swapped), to = board_of(match.score(), swapped);
     play([&](Canvas &canvas, double t) { animUndo(canvas, t, from, to); }, UNDO_S);
     show_board();
 }
@@ -340,7 +340,7 @@ extern "C" void app_main(void)
 {
     initArduino();
 
-    dmd.start();
+    panel.start();
 
     s_events = xQueueCreate(16, sizeof(rx433_event_t));
     rx433_config_t cfg = {};

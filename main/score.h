@@ -22,7 +22,7 @@ struct Score {
     uint8_t sets[2] = {};
     uint8_t set_games[3][2] = {}; // games of each finished set, per team
     uint8_t server = 0;     // team serving the next point
-    uint8_t tb_first = 0;   // team that served the first tiebreak point
+    uint8_t tiebreak_first_server = 0;   // team that served the first tiebreak point
     uint8_t swaps = 0;      // changes of ends so far
     bool tiebreak = false;
     int8_t winner = -1;     // team that won the match, -1 while playing
@@ -33,7 +33,7 @@ struct Score {
 
 class Match {
 public:
-    const Score &score() const { return s_; }
+    const Score &score() const { return score_; }
 
     // Awards a point to team 0 or 1. Ignored once the match is over.
     void point(int team);
@@ -47,12 +47,12 @@ public:
     void reset() { *this = Match(); }
 
 private:
-    static constexpr int HISTORY = 256; // oldest points drop off beyond this
+    static constexpr int HISTORY_DEPTH = 256; // oldest points drop off beyond this
 
     void winGame(int team);
 
-    Score s_;
-    Score history_[HISTORY];
+    Score score_;
+    Score history_[HISTORY_DEPTH];
     int head_ = 0;  // next slot to write
-    int depth_ = 0; // valid entries, up to HISTORY
+    int depth_ = 0; // valid entries, up to HISTORY_DEPTH
 };

@@ -33,10 +33,10 @@ def main(src, out):
         "};",
         "",
     ]
-    for key, cname, w, h in FONTS:
+    for key, c_name, w, h in FONTS:
         font = fonts[key]
         glyphs = font["glyphs"]
-        lines.append(f"static const uint8_t {cname}_GLYPHS[96][7] = {{")
+        lines.append(f"static const uint8_t {c_name}_GLYPHS[96][7] = {{")
         for code in range(32, 128):
             ch = chr(code)
             rows = glyphs.get(ch)
@@ -44,19 +44,19 @@ def main(src, out):
                 lines.append("    {0},")
                 continue
             assert len(rows) == h and all(len(row) == w for row in rows), (key, ch)
-            vals = []
+            row_bytes = []
             for row in rows:
                 bits = 0
                 for i_col, pixel in enumerate(row):
                     if pixel == "#":
                         bits |= 1 << (w - 1 - i_col)
-                vals.append(f"0x{bits:02x}")
-            lines.append(f"    {{{', '.join(vals)}}}, // '{ch}'")
+                row_bytes.append(f"0x{bits:02x}")
+            lines.append(f"    {{{', '.join(row_bytes)}}}, // '{ch}'")
         lines.append("};")
-        lines.append(f"static const Font {cname} = {{{w}, {h}, {font['advance']}, {cname}_GLYPHS}};")
+        lines.append(f"static const Font {c_name} = {{{w}, {h}, {font['advance']}, {c_name}_GLYPHS}};")
         lines.append("")
-    with open(out, "w") as fh:
-        fh.write("\n".join(lines))
+    with open(out, "w") as header_file:
+        header_file.write("\n".join(lines))
     print(f"{out}: {len(FONTS)} fonts")
 
 

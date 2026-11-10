@@ -83,13 +83,13 @@ int main()
             game(match, 1);
         }
         CHECK(match.score().tiebreak && match.score().games[0] == 6 && match.score().games[1] == 6);
-        int tb_first = match.score().server;
+        int tiebreak_first_server = match.score().server;
         for (int i = 0; i < 7; i++) {
             match.point(1);
         }
         CHECK(!match.score().tiebreak && match.score().sets[1] == 1);
         CHECK(match.score().set_games[0][0] == 6 && match.score().set_games[0][1] == 7);
-        CHECK(match.score().server == 1 - tb_first);
+        CHECK(match.score().server == 1 - tiebreak_first_server);
         CHECK(match.score().swaps == 1);
     }
     {

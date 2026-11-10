@@ -17,8 +17,8 @@ struct Board {
     bool tiebreak = false; // points are plain numbers
     int games[2] = {0, 0}; // in the current set, 0..7
     int sets[2] = {0, 0};  // 0..2
-    int sv = 0;            // side serving
-    int bx = 0;            // service box: 0 top, 1 bottom
+    int servingSide = 0;            // side serving
+    int serveBox = 0;            // service box: 0 top, 1 bottom
 
     bool golden() const { return !tiebreak && pts[0] == 3 && pts[1] == 3; } // row shows GOLDEN
 };
@@ -56,21 +56,21 @@ void animSet(Canvas &canvas, double t, const Board &from, const Board &to, int w
 void animMatch(Canvas &canvas, double t, const Board &from, int winner, const char *finalScore);
 
 // Swap ends (§5.7): the board folds into the centre, SWAP / ENDS waits for
-// the press at pressT, then the board emerges mirrored (to). Ends at
-// pressT + SWAP_AFTER_PRESS_S.
-void animSwap(Canvas &canvas, double t, const Board &from, const Board &to, double pressT);
+// the press at pressedAt, then the board emerges mirrored (to). Ends at
+// pressedAt + SWAP_AFTER_PRESS_S.
+void animSwap(Canvas &canvas, double t, const Board &from, const Board &to, double pressedAt);
 
-// Bind controllers (§5.2): PRESS / LEFT until pressL, wipe, PRESS / RIGHT
-// until pressR, wipe into the Select Serve prompt. Ends at
-// pressR + BIND_AFTER_PRESS_S; continue with animServe on a clock starting
+// Bind controllers (§5.2): PRESS / LEFT until leftPressedAt, wipe, PRESS / RIGHT
+// until rightPressedAt, wipe into the Select Serve prompt. Ends at
+// rightPressedAt + BIND_AFTER_PRESS_S; continue with animServe on a clock starting
 // there, so the prompt reads SELECT before SERVE.
-void animBind(Canvas &canvas, double t, double pressL, double pressR);
+void animBind(Canvas &canvas, double t, double leftPressedAt, double rightPressedAt);
 
-// Select serve (§5.3): SELECT / SERVE until pressT from `side`. The prompt
+// Select serve (§5.3): SELECT / SERVE until pressedAt from `side`. The prompt
 // rolls away, that side's arrowhead glides to the centre and becomes the serve
 // triangle (side's first-serve box `box`), and the rest of the fresh board
-// emerges from the centre around it. Ends at pressT + SERVE_AFTER_PRESS_S.
-void animServe(Canvas &canvas, double t, double pressT, int side, int box);
+// emerges from the centre around it. Ends at pressedAt + SERVE_AFTER_PRESS_S.
+void animServe(Canvas &canvas, double t, double pressedAt, int side, int box);
 
 // The hand-over from the splash (§5.1): masks the Bind screen so it wipes in
 // from the dividing line outward over the first BIND_WIPE_IN_S seconds.

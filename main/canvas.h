@@ -24,7 +24,7 @@ struct Canvas {
     static constexpr int W = 32, H = 16;
 
     uint32_t rows[H] = {};
-    int cx0 = 0, cx1 = W - 1, cy0 = 0, cy1 = H - 1; // clip, inclusive
+    int clipLeft = 0, clipRight = W - 1, clipTop = 0, clipBottom = H - 1; // clip, inclusive
 
     void clear()
     {
@@ -36,7 +36,7 @@ struct Canvas {
 
     void set(int x, int y, bool on = true)
     {
-        if (x < cx0 || x > cx1 || y < cy0 || y > cy1 || x < 0 || x >= W || y < 0 || y >= H) {
+        if (x < clipLeft || x > clipRight || y < clipTop || y > clipBottom || x < 0 || x >= W || y < 0 || y >= H) {
             return;
         }
         uint32_t bit = 0x80000000u >> x;
@@ -48,7 +48,7 @@ struct Canvas {
     }
 
     // For positions computed as floats (fireworks), rounded like the reference.
-    void setf(double x, double y, bool on = true) { set(jsround(x), jsround(y), on); }
+    void setRounded(double x, double y, bool on = true) { set(jsround(x), jsround(y), on); }
 
     bool get(int x, int y) const
     {
@@ -62,23 +62,23 @@ struct Canvas {
     // Nested clips intersect; the reference replaces the clip, but no clip in
     // the design ever has to widen an outer one.
     struct ClipState {
-        int x0, x1, y0, y1;
+        int left, right, top, bottom;
     };
     ClipState pushClip(int x0, int x1, int y0, int y1)
     {
-        ClipState old = {cx0, cx1, cy0, cy1};
-        cx0 = x0 > cx0 ? x0 : cx0;
-        cx1 = x1 < cx1 ? x1 : cx1;
-        cy0 = y0 > cy0 ? y0 : cy0;
-        cy1 = y1 < cy1 ? y1 : cy1;
+        ClipState old = {clipLeft, clipRight, clipTop, clipBottom};
+        clipLeft = x0 > clipLeft ? x0 : clipLeft;
+        clipRight = x1 < clipRight ? x1 : clipRight;
+        clipTop = y0 > clipTop ? y0 : clipTop;
+        clipBottom = y1 < clipBottom ? y1 : clipBottom;
         return old;
     }
     void popClip(const ClipState &saved)
     {
-        cx0 = saved.x0;
-        cx1 = saved.x1;
-        cy0 = saved.y0;
-        cy1 = saved.y1;
+        clipLeft = saved.left;
+        clipRight = saved.right;
+        clipTop = saved.top;
+        clipBottom = saved.bottom;
     }
     void noClip() { popClip({0, W - 1, 0, H - 1}); }
 };
