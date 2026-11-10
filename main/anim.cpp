@@ -179,7 +179,7 @@ static void tallyPosts(Canvas &canvas)
     }
 }
 
-// Set cell setIndex (0 = first set won, lower; 1 = second, upper) against
+// The tally cell for set setIndex (0 = first set won, lower; 1 = second, upper) against
 // edge x0, grown to `rows` of its 4 rows from the bottom.
 static void tallyCell(Canvas &canvas, int x0, int setIndex, int rows = 4)
 {
