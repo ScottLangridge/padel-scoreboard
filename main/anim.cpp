@@ -136,7 +136,7 @@ static void dash(Canvas &canvas, int dx = 0)
 
 // Both points numbers, each shifted by its own offset; the dash only when
 // neither has moved.
-static void points(Canvas &canvas, const char *left, const char *right, int d_left = 0, int d_right = 0)
+static void pointsSplit(Canvas &canvas, const char *left, const char *right, int d_left = 0, int d_right = 0)
 {
     text5x7(canvas, left, leftPointsX(left) + d_left, POINTS_Y);
     text5x7(canvas, right, POINTS_RIGHT_X + d_right, POINTS_Y);
@@ -162,7 +162,7 @@ static void pointsRow(Canvas &canvas, const Board &board, int dx = 0, int y = PO
     }
 }
 
-static void games(Canvas &canvas, const Board &board)
+static void gamesRow(Canvas &canvas, const Board &board)
 {
     char buf[4];
     snprintf(buf, sizeof buf, "%d", board.games[0]);
@@ -171,7 +171,7 @@ static void games(Canvas &canvas, const Board &board)
     text3x5(canvas, buf, GAMES_RIGHT_X, GAMES_Y);
 }
 
-static void setPosts(Canvas &canvas)
+static void tallyPosts(Canvas &canvas)
 {
     for (int y = 9; y < 16; y++) {
         canvas.set(2, y);
@@ -181,7 +181,7 @@ static void setPosts(Canvas &canvas)
 
 // Set cell setIndex (0 = first set won, lower; 1 = second, upper) against
 // edge x0, grown to `rows` of its 4 rows from the bottom.
-static void setCell(Canvas &canvas, int x0, int setIndex, int rows = 4)
+static void tallyCell(Canvas &canvas, int x0, int setIndex, int rows = 4)
 {
     int bottom = setIndex ? 12 : 16;
     for (int y = bottom - rows; y < bottom; y++) {
@@ -192,17 +192,17 @@ static void setCell(Canvas &canvas, int x0, int setIndex, int rows = 4)
 
 static void setsTally(Canvas &canvas, int leftSets, int rightSets, int rows = 4)
 {
-    setPosts(canvas);
+    tallyPosts(canvas);
     for (int i = 0; i < leftSets; i++) {
-        setCell(canvas, 0, i, rows);
+        tallyCell(canvas, 0, i, rows);
     }
     for (int i = 0; i < rightSets; i++) {
-        setCell(canvas, 30, i, rows);
+        tallyCell(canvas, 30, i, rows);
     }
 }
 
 // Serve triangle (§2.1): right angle toward the corner the serve comes from.
-static void serve(Canvas &canvas, int side, int box, int size = 4)
+static void serveTriangle(Canvas &canvas, int side, int box, int size = 4)
 {
     int x0 = side ? 18 : 13, y0 = box ? 14 : 10;
     for (int i_row = 0; i_row < size; i_row++) {
@@ -217,18 +217,18 @@ static void serve(Canvas &canvas, int side, int box, int size = 4)
 static void serveFlip(Canvas &canvas, const Board &from, const Board &to, double progress)
 {
     if (progress <= 0) {
-        serve(canvas, from.servingSide, from.serveBox);
+        serveTriangle(canvas, from.servingSide, from.serveBox);
     } else if (progress >= 1) {
-        serve(canvas, to.servingSide, to.serveBox);
+        serveTriangle(canvas, to.servingSide, to.serveBox);
     } else if (progress < 0.5) {
         int size = jsround(4 * (1 - 2 * progress));
         if (size) {
-            serve(canvas, from.servingSide, from.serveBox, size);
+            serveTriangle(canvas, from.servingSide, from.serveBox, size);
         }
     } else {
         int size = jsround(4 * (2 * progress - 1));
         if (size) {
-            serve(canvas, to.servingSide, to.serveBox, size);
+            serveTriangle(canvas, to.servingSide, to.serveBox, size);
         }
     }
 }
@@ -237,9 +237,9 @@ void drawBoard(Canvas &canvas, const Board &board)
 {
     netLine(canvas);
     pointsRow(canvas, board);
-    games(canvas, board);
+    gamesRow(canvas, board);
     setsTally(canvas, board.sets[0], board.sets[1]);
-    serve(canvas, board.servingSide, board.serveBox);
+    serveTriangle(canvas, board.servingSide, board.serveBox);
 }
 
 // ---------------------------------------------------------------------------
@@ -391,7 +391,7 @@ static void dissolve(Canvas &canvas, int count)
 static void pointBody(Canvas &canvas, double t, const Board &from, const Board &to, int side, bool withDash)
 {
     netLine(canvas);
-    games(canvas, from);
+    gamesRow(canvas, from);
     setsTally(canvas, from.sets[0], from.sets[1]);
     serveFlip(canvas, from, to, progressBetween(t, 0.5, 0.75));
     double progress = progressBetween(t, 0.3, 0.7);
@@ -432,9 +432,9 @@ void animGolden(Canvas &canvas, double t, const Board &from, const Board &to, in
         return;
     }
     netLine(canvas);
-    games(canvas, from);
+    gamesRow(canvas, from);
     setsTally(canvas, from.sets[0], from.sets[1]);
-    serve(canvas, to.servingSide, to.serveBox);
+    serveTriangle(canvas, to.servingSide, to.serveBox);
     if (t < T_SWEEP_END) {
         // Twin bars sweep to the edges: 40-40 ahead of them, GOLDEN behind.
         int spread = jsround(easeBetween(t, T_SWEEP_START, T_SWEEP_END) * 16);
@@ -468,7 +468,7 @@ void animGolden(Canvas &canvas, double t, const Board &from, const Board &to, in
 void animUndo(Canvas &canvas, double t, const Board &from, const Board &to)
 {
     netLine(canvas);
-    games(canvas, from);
+    gamesRow(canvas, from);
     setsTally(canvas, from.sets[0], from.sets[1]);
     serveFlip(canvas, from, to, progressBetween(t, 0.5, 0.75));
     if (t < 0.75) { // the line runs backwards: dark gaps marching right to left
@@ -514,13 +514,13 @@ void animGame(Canvas &canvas, double t, const Board &from, const Board &to, int 
     // Games row: the winner's digit rolls up with a sparkle at its corners.
     int winnerGamesX = winner ? GAMES_RIGHT_X : GAMES_LEFT_X, loserGamesX = loser ? GAMES_RIGHT_X : GAMES_LEFT_X;
     if (t < 1.5) {
-        games(canvas, from);
+        gamesRow(canvas, from);
     } else {
-        char leftBuf[4], oldBuf[4], newBuf[4];
-        snprintf(leftBuf, sizeof leftBuf, "%d", from.games[loser]);
+        char loserBuf[4], oldBuf[4], newBuf[4];
+        snprintf(loserBuf, sizeof loserBuf, "%d", from.games[loser]);
         snprintf(oldBuf, sizeof oldBuf, "%d", from.games[winner]);
         snprintf(newBuf, sizeof newBuf, "%d", to.games[winner]);
-        text3x5(canvas, leftBuf, loserGamesX, GAMES_Y);
+        text3x5(canvas, loserBuf, loserGamesX, GAMES_Y);
         roll(canvas, oldBuf, newBuf, [winnerGamesX](const char *) { return winnerGamesX; }, GAMES_Y, progressBetween(t, 1.5, 1.9), 1, FACE_3X5);
     }
     if (t >= 1.5 && t < 1.7) {
@@ -542,7 +542,7 @@ void animGame(Canvas &canvas, double t, const Board &from, const Board &to, int 
             canvas.popClip(clip);
         } else {
             char leftBuf[4], rightBuf[4];
-            points(canvas, ptsText(from, 0, leftBuf), ptsText(from, 1, rightBuf), -slide, slide);
+            pointsSplit(canvas, ptsText(from, 0, leftBuf), ptsText(from, 1, rightBuf), -slide, slide);
         }
     }
     // ...GAME drops in letter by letter, then lifts out the top...
@@ -662,12 +662,12 @@ void animMatch(Canvas &canvas, double t, const Board &from, int winner, const ch
 
 void animSwap(Canvas &canvas, double t, const Board &from, const Board &to, double pressedAt)
 {
-    const double EMERGE = pressedAt + 0.3;
+    const double T_EMERGE = pressedAt + 0.3;
     netLine(canvas);
-    double foldIn = pow(progressBetween(t, 0, 0.5), 2), emergeOut = easeBetween(t, EMERGE, EMERGE + 0.6); // accelerate in, decelerate out
-    const Board &shown = t < EMERGE ? from : to;
-    int offset = t < EMERGE ? jsround(foldIn * 12) : jsround((1 - emergeOut) * 12);
-    if (t < 0.5 || t >= EMERGE) { // each half slides into / out of the centre
+    double foldIn = pow(progressBetween(t, 0, 0.5), 2), emergeOut = easeBetween(t, T_EMERGE, T_EMERGE + 0.6); // accelerate in, decelerate out
+    const Board &shown = t < T_EMERGE ? from : to;
+    int offset = t < T_EMERGE ? jsround(foldIn * 12) : jsround((1 - emergeOut) * 12);
+    if (t < 0.5 || t >= T_EMERGE) { // each half slides into / out of the centre
         char leftBuf[4], rightBuf[4], leftGamesBuf[4], rightGamesBuf[4];
         const char *left = ptsText(shown, 0, leftBuf), *right = ptsText(shown, 1, rightBuf);
         snprintf(leftGamesBuf, sizeof leftGamesBuf, "%d", shown.games[0]);
@@ -682,10 +682,10 @@ void animSwap(Canvas &canvas, double t, const Board &from, const Board &to, doub
         text3x5(canvas, rightGamesBuf, GAMES_RIGHT_X - offset, GAMES_Y);
         canvas.popClip(clip);
     }
-    double cellGrow = t < EMERGE ? 1 - foldIn : emergeOut; // set cells shrink, then regrow
+    double cellGrow = t < T_EMERGE ? 1 - foldIn : emergeOut; // set cells shrink, then regrow
     setsTally(canvas, shown.sets[0], shown.sets[1], jsround(4 * cellGrow));
-    if (t >= 0.5 && t < EMERGE) { // the prompt, rolling away once acknowledged
-        int up = jsround(easeBetween(t, pressedAt, EMERGE) * 8);
+    if (t >= 0.5 && t < T_EMERGE) { // the prompt, rolling away once acknowledged
+        int up = jsround(easeBetween(t, pressedAt, T_EMERGE) * 8);
         auto clip = canvas.pushClip(0, 31, POINTS_Y, POINTS_Y + 6);
         altWords(canvas, "SWAP", "ENDS", t - 0.5, POINTS_Y - up, 0.6, 0.15);
         canvas.popClip(clip);
@@ -697,9 +697,9 @@ void animSwap(Canvas &canvas, double t, const Board &from, const Board &to, doub
         }
     }
     if (t < 0.5) {
-        serve(canvas, from.servingSide, from.serveBox);
-    } else if (t >= EMERGE) {
-        serve(canvas, to.servingSide, to.serveBox);
+        serveTriangle(canvas, from.servingSide, from.serveBox);
+    } else if (t >= T_EMERGE) {
+        serveTriangle(canvas, to.servingSide, to.serveBox);
     }
 }
 
@@ -773,10 +773,10 @@ void animServe(Canvas &canvas, double t, double pressedAt, int side, int box)
             }
         } else {
             int size = jsround(4 * (2 * progress - 1));
-            serve(canvas, side, box, size < 1 ? 1 : size);
+            serveTriangle(canvas, side, box, size < 1 ? 1 : size);
         }
     } else { // the rest of the board emerges from the centre around the triangle
-        serve(canvas, side, box);
+        serveTriangle(canvas, side, box);
         double emerge = easeBetween(t, MORPH, DONE);
         int offset = jsround((1 - emerge) * 12);
         dash(canvas);
@@ -814,20 +814,20 @@ bool drawFixed(Canvas &canvas, const FixedFrame *frames, int count, double t)
     // Walk by source frames rather than ms so frame boundaries fall exactly
     // on 30 fps ticks.
     int target = (int)floor(t * 30 + 1e-9);
-    int frame = 0, start = 0;
-    while (frame < count - 1) {
-        int ticks = jsround(frames[frame].ms * 30 / 1000.0);
+    int shown = 0, start = 0;
+    while (shown < count - 1) {
+        int ticks = jsround(frames[shown].ms * 30 / 1000.0);
         if (target < start + ticks) {
             break;
         }
         start += ticks;
-        frame++;
+        shown++;
     }
     for (int y = 0; y < 16; y++) {
-        canvas.rows[y] |= frames[frame].rows[y];
+        canvas.rows[y] |= frames[shown].rows[y];
     }
     int total = start;
-    for (int i_frame = frame; i_frame < count; i_frame++) {
+    for (int i_frame = shown; i_frame < count; i_frame++) {
         total += jsround(frames[i_frame].ms * 30 / 1000.0);
     }
     return target < total;

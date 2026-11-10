@@ -46,9 +46,9 @@ const driver = `
         }
         return { name: clip.name, dur: clip.dur, loopFrom: clip.loopFrom ?? null, frames };
     });`;
-const clips = new Function(html.slice(start, end) + "\n" + driver)();
+const rendered = new Function(html.slice(start, end) + "\n" + driver)();
 
-for (const clip of clips) {
+for (const clip of rendered) {
     const merged = [];
     for (const hex of clip.frames) {
         if (merged.length && merged[merged.length - 1].hex === hex) {

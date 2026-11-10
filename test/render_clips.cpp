@@ -117,8 +117,8 @@ int main(int argc, char **argv)
 
     // Like the simulator, the reference render includes one frame past the
     // end, clamped to the clip's duration (the looping clips wrap instead).
-    int frames = (int)ceil(clip->duration * 30 - 1e-9) + 1;
-    for (int frame = 0; frame < frames; frame++) {
+    int frameCount = (int)ceil(clip->duration * 30 - 1e-9) + 1;
+    for (int frame = 0; frame < frameCount; frame++) {
         double t = frame / 30.0;
         if (t > clip->duration) {
             t = strcmp(clip->name, "splash") == 0 ? t - clip->duration : clip->duration;

@@ -14,7 +14,7 @@ static int fails = 0;
         }                                                                                                              \
     } while (0)
 
-static void game(Match &match, int team)
+static void win_game(Match &match, int team)
 {
     for (int i = 0; i < 4; i++) {
         match.point(team);
@@ -22,13 +22,13 @@ static void game(Match &match, int team)
 }
 
 // Team `team` wins a set `won`-`lost`, from 0-0.
-static void set(Match &match, int team, int won, int lost)
+static void win_set(Match &match, int team, int won, int lost)
 {
     for (int i = 0; i < lost; i++) {
-        game(match, 1 - team);
+        win_game(match, 1 - team);
     }
     for (int i = 0; i < won; i++) {
-        game(match, team);
+        win_game(match, team);
     }
 }
 
@@ -37,12 +37,12 @@ int main()
     {
         // Ends change after a set, not after games.
         Match match;
-        game(match, 0);
-        game(match, 1);
-        game(match, 0);
+        win_game(match, 0);
+        win_game(match, 1);
+        win_game(match, 0);
         CHECK(match.score().swaps == 0 && !match.score().endsSwapped());
         for (int i = 0; i < 4; i++) {
-            game(match, 0); // 6-1
+            win_game(match, 0); // 6-1
         }
         CHECK(match.score().sets[0] == 1 && match.score().games[0] == 0 && match.score().games[1] == 0);
         CHECK(match.score().swaps == 1 && match.score().endsSwapped());
@@ -52,11 +52,11 @@ int main()
         match.point(0);
         CHECK(match.score().swaps == 1);
 
-        set(match, 1, 6, 4); // team 1 levels: swap again
+        win_set(match, 1, 6, 4); // team 1 levels: swap again
         CHECK(match.score().sets[1] == 1 && match.score().swaps == 2 && !match.score().endsSwapped());
         CHECK(match.score().set_games[1][0] == 4 && match.score().set_games[1][1] == 6);
 
-        set(match, 0, 6, 2); // team 0 takes the match: nobody changes ends after it
+        win_set(match, 0, 6, 2); // team 0 takes the match: nobody changes ends after it
         CHECK(match.score().winner == 0 && match.score().swaps == 2);
         CHECK(match.score().set_games[2][0] == 6 && match.score().set_games[2][1] == 2);
         match.undo();
@@ -79,8 +79,8 @@ int main()
         // Tiebreak at 6-6, set 7-6, serve returns to the receiver of the tiebreak's first point.
         Match match;
         for (int i = 0; i < 6; i++) {
-            game(match, 0);
-            game(match, 1);
+            win_game(match, 0);
+            win_game(match, 1);
         }
         CHECK(match.score().tiebreak && match.score().games[0] == 6 && match.score().games[1] == 6);
         int tiebreak_first_server = match.score().server;

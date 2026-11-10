@@ -497,8 +497,8 @@ esp_err_t rx433_start(const rx433_config_t *config)
     ESP_RETURN_ON_ERROR(rmt_rx_register_event_callbacks(s_channel, &callbacks, NULL), TAG, "callbacks");
     ESP_RETURN_ON_ERROR(rmt_enable(s_channel), TAG, "enable");
 
-    BaseType_t repaired = xTaskCreate(rx_task, "rx433", 4096, NULL, CONFIG_RX433_TASK_PRIORITY, NULL);
-    ESP_RETURN_ON_FALSE(repaired == pdPASS, ESP_ERR_NO_MEM, TAG, "task");
+    BaseType_t created = xTaskCreate(rx_task, "rx433", 4096, NULL, CONFIG_RX433_TASK_PRIORITY, NULL);
+    ESP_RETURN_ON_FALSE(created == pdPASS, ESP_ERR_NO_MEM, TAG, "task");
 
     ESP_RETURN_ON_ERROR(rmt_receive(s_channel, s_chunk, sizeof(s_chunk), &s_rx_cfg), TAG, "receive");
     ESP_LOGI(TAG, "listening on GPIO%d", config->gpio);

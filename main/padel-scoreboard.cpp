@@ -350,10 +350,10 @@ extern "C" void app_main(void)
     ESP_ERROR_CHECK(rx433_start(&cfg));
 
     splash();
-    Clock setup;
-    bind(setup);
-    Clock serve;
-    match.setFirstServer(select_serve(serve));
+    Clock setup_clock;
+    bind(setup_clock);
+    Clock serve_clock;
+    match.setFirstServer(select_serve(serve_clock));
     show_board();
 
     int held = -1;          // team whose button is down, -1 = none
