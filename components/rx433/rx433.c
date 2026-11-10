@@ -172,7 +172,7 @@ static segment_t decode_segment(int from, uint32_t bit_period, int max_bits)
     while (i >= 0 && seg.bits < max_bits) {
         uint32_t period, short_us;
         bool is_one;
-        int step_bits = 1; // bits this step produces
+        int step_bits = 1; // bits this step produces: more when a missed-pulse repair finds hidden 0s
 
         if (is_bit(&s_frame[i], &period, &short_us, &is_one) && period_matches(period, bit_period)) {
             i--;
@@ -195,8 +195,9 @@ static segment_t decode_segment(int from, uint32_t bit_period, int max_bits)
             const rmt_symbol_word_t *sym = &s_frame[i];
             if (!repaired && sym->level0 == 1 && sym->level1 == 0 && sym->duration1) {
                 uint32_t len = sym->duration0 + sym->duration1;
-                for (step_bits = 2; step_bits <= MAX_MISSED + 1; step_bits++) {
-                    if (period_matches(len, bit_period * step_bits) && seg.bits + step_bits <= max_bits) {
+                for (int bit_count = 2; bit_count <= MAX_MISSED + 1; bit_count++) {
+                    if (period_matches(len, bit_period * bit_count) && seg.bits + bit_count <= max_bits) {
+                        step_bits = bit_count;
                         is_one = sym->duration0 * 2 > bit_period;
                         short_us = is_one ? bit_period / 4 : sym->duration0;
                         i--;
@@ -218,7 +219,6 @@ static segment_t decode_segment(int from, uint32_t bit_period, int max_bits)
         seg.code |= (uint32_t)is_one << seg.bits;
         seg.short_sum += short_us;
         seg.bits++;
-        step_bits = 1;
     }
     seg.stop = i;
     return seg;

@@ -164,11 +164,11 @@ static void pointsRow(Canvas &canvas, const Board &board, int dx = 0, int y = PO
 
 static void gamesRow(Canvas &canvas, const Board &board)
 {
-    char buf[4];
-    snprintf(buf, sizeof buf, "%d", board.games[0]);
-    text3x5(canvas, buf, GAMES_LEFT_X, GAMES_Y);
-    snprintf(buf, sizeof buf, "%d", board.games[1]);
-    text3x5(canvas, buf, GAMES_RIGHT_X, GAMES_Y);
+    char leftBuf[4], rightBuf[4];
+    snprintf(leftBuf, sizeof leftBuf, "%d", board.games[0]);
+    snprintf(rightBuf, sizeof rightBuf, "%d", board.games[1]);
+    text3x5(canvas, leftBuf, GAMES_LEFT_X, GAMES_Y);
+    text3x5(canvas, rightBuf, GAMES_RIGHT_X, GAMES_Y);
 }
 
 static void tallyPosts(Canvas &canvas)
@@ -489,8 +489,8 @@ void animUndo(Canvas &canvas, double t, const Board &from, const Board &to)
         return;
     }
     dash(canvas, tug);
-    char oldBuf[4], newBuf[4];
     for (int side = 0; side < 2; side++) {
+        char oldBuf[4], newBuf[4];
         const char *oldText = ptsText(from, side, oldBuf), *newText = ptsText(to, side, newBuf);
         auto xForText = [side, tug](const char *str) { return (side ? POINTS_RIGHT_X : leftPointsX(str)) + tug; };
         if (strcmp(oldText, newText) == 0) {
