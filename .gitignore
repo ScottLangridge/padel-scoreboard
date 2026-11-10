@@ -15,3 +15,6 @@ managed_components/
 # Host test binaries
 test/render_clips
 test/score_test
+
+# Claude Code (agent worktrees etc.)
+.claude/
