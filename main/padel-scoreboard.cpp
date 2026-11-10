@@ -166,6 +166,7 @@ static Board board_of(const Score &score, bool swapped)
     return board;
 }
 
+// Logs the current score and draws it as a still board.
 static void show_board()
 {
     const Score &score = match.score();
@@ -293,7 +294,8 @@ static void swap_ends(const Board &from, const Board &to)
 }
 
 // A point to `team`: the score moves on and the matching animation plays,
-// then Swap Ends after a set.
+// then Swap Ends after a set, and the new board is left on the panel. A
+// point that wins the match goes to match_over() and never returns.
 static void scored(int team)
 {
     Score before = match.score();

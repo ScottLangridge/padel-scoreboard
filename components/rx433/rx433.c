@@ -236,6 +236,8 @@ static void log_segment(const char *what, const segment_t *seg, int from, uint32
 #endif
 }
 
+// Decodes the capture buffered since the last gap and hands each code found
+// to press tracking (frame_seen()).
 static void frame_decode(void)
 {
     const int max_bits = CONFIG_RX433_BITS ? CONFIG_RX433_BITS : MAX_BITS;
@@ -383,7 +385,11 @@ static bool is_known(uint32_t code, uint8_t bits)
     return false;
 }
 
-static void pressed(const seen_t *seen, uint16_t pulse_us, TickType_t now)
+// A confirmed frame of `seen`'s code, which may emit events: RELEASE of a
+// different held code, PRESS if this starts a press, LONG once it has been
+// held long_press_ms. Also keeps the press alive and remembers the code as
+// known.
+static void confirmed_frame(const seen_t *seen, uint16_t pulse_us, TickType_t now)
 {
     if (s_held.valid && (s_held.code != seen->code || s_held.bits != seen->bits)) {
         emit(RX433_EVENT_RELEASE, &s_held, 0);
@@ -407,6 +413,9 @@ static void pressed(const seen_t *seen, uint16_t pulse_us, TickType_t now)
     remember(&s_held);
 }
 
+// One decoded frame: identifies it (full, or clipped and matched to a code
+// it is part of), applies the confirmation rules above, and passes confirmed
+// frames to confirmed_frame().
 static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
 {
     TickType_t now = xTaskGetTickCount();
@@ -422,7 +431,7 @@ static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
 #endif
         if (confirmed) {
             s_candidate.valid = false;
-            pressed(&seen, pulse_us, now);
+            confirmed_frame(&seen, pulse_us, now);
         } else {
             s_candidate = seen;
         }
@@ -447,7 +456,7 @@ static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
     if (match) {
         seen_t seen = *match;
         s_candidate.valid = false;
-        pressed(&seen, pulse_us, now);
+        confirmed_frame(&seen, pulse_us, now);
     }
 }
 
