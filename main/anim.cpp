@@ -754,7 +754,7 @@ void animBind(Canvas &canvas, double t, double leftPressedAt, double rightPresse
 
 void animServe(Canvas &canvas, double t, double pressedAt, int side, int box)
 {
-    const double GLIDE = pressedAt + 0.5, MORPH = GLIDE + 0.3, DONE = MORPH + 0.6;
+    const double T_GLIDE = pressedAt + 0.5, T_MORPH = T_GLIDE + 0.3, T_DONE = T_MORPH + 0.6;
     int dir = side ? 1 : -1;   // the arrowhead points outward
     int tipStart = side ? 27 : 4;  // at the edge...
     int tipEnd = side ? 18 : 13; // ...glides to the serve triangle's corner
@@ -769,10 +769,10 @@ void animServe(Canvas &canvas, double t, double pressedAt, int side, int box)
         altWords(canvas, "SELECT", "SERVE", t, POINTS_Y - up, 0.9, 0.2, FACE_4X7);
         canvas.popClip(clip);
     }
-    if (t < GLIDE) {
-        arrowhead(canvas, jsround(mix(tipStart, tipEnd, easeBetween(t, pressedAt, GLIDE))), dir, 0);
-    } else if (t < MORPH) { // folds to one column, regrows as the triangle
-        double progress = progressBetween(t, GLIDE, MORPH);
+    if (t < T_GLIDE) {
+        arrowhead(canvas, jsround(mix(tipStart, tipEnd, easeBetween(t, pressedAt, T_GLIDE))), dir, 0);
+    } else if (t < T_MORPH) { // folds to one column, regrows as the triangle
+        double progress = progressBetween(t, T_GLIDE, T_MORPH);
         if (progress < 0.5) {
             int halfWidth = jsround(2 * (1 - 2 * progress));
             for (int i = 0; i <= halfWidth; i++) {
@@ -786,7 +786,7 @@ void animServe(Canvas &canvas, double t, double pressedAt, int side, int box)
         }
     } else { // the rest of the board emerges from the centre around the triangle
         serveTriangle(canvas, side, box);
-        double emerge = easeBetween(t, MORPH, DONE);
+        double emerge = easeBetween(t, T_MORPH, T_DONE);
         int offset = jsround((1 - emerge) * 12);
         dash(canvas);
         auto clip = canvas.pushClip(0, 13, 0, 15);
