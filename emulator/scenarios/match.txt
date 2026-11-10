@@ -1,0 +1,35 @@
+# A whole match on the emulator: team A (remote a) beats team B 6-0 6-0.
+# Along the way: the splash is skipped, a stranger's remote is ignored, a
+# golden point, an undo by long press, and the change of ends after set 1.
+#
+#   emulator/emulator --script emulator/scenarios/match.txt
+
+1.0  tap a        # skips the splash; doesn't bind anything
++0.5 snap         # PRESS / LEFT
++1.5 tap a        # remote a is the left team, A
++1.5 tap b        # remote b is the right team, B
++1.0 snap         # SELECT / SERVE
++2.5 tap a        # team A serves first
++2.0 snap         # the fresh board, 0-0
++1.0 tap x        # a stranger's remote: ignored
+
+# Set 1, 6-0, with an undo in the first game.
++1.2 tap a x2     # 30-0
++1.2 tap b        # 30-15
++2.0 hold b 1.5   # long press: undo it, back to 30-0
++3.0 snap
++1.2 tap a x22    # the rest of the set (the last point wins it)
+
+# Change ends: the board folds away until a remote acknowledges it.
++5.0 snap         # SWAP / ENDS
++0.5 tap b
++2.0 snap         # A is now on the right
+
+# Set 2: a golden point first, then the rest.
++1.2 tap a x3     # 40-0
++1.2 tap b x3     # 40-40
++2.0 snap         # GOLDEN
++1.2 tap a        # the golden point wins the game
++1.2 tap a x20    # the rest of the match
+
++8.0 snap         # MATCH and the final score
