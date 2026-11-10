@@ -1,0 +1,46 @@
+# A first set decided 7-6 on a tiebreak, then the rest of the match.
+# Checks the tiebreak's scoring and serve order (design/SPEC.md, main/score.h):
+#   - at 6-6 the set goes to a tiebreak, served first by the team due to serve;
+#   - serve changes after the first point, then every two points;
+#   - 7 points with a 2-point lead wins it, and the set, 7-6;
+#   - the first game after it is served by the team that received first.
+
+start a                          # A serves the first game
+game a
+game b
+game a
+game b
+game a
+game b
+game a
+game b
+game a
+game b
+game a
+game b
+expect score "sets 0-0 games 6-6 points 0-0 (tiebreak) serve A"   # 12 games in: A's turn
+snap                             # the points show as plain numbers
+
+point a
+expect score "points 1-0 (tiebreak) serve B"   # changes after the first point...
+point b x2
+expect score "points 1-2 (tiebreak) serve A"   # ...then every two
+point a x2
+expect score "points 3-2 (tiebreak) serve B"
+point b x2
+point a x2
+point b
+point a
+expect score "points 6-5 (tiebreak) serve A"
+point b                          # 6-6: no winner without a 2-point lead
+expect score "points 6-6 (tiebreak) serve A"
+point a x2                       # 8-6 wins it
+expect log "swap ends"
+
+swap
+expect score "sets 1-0 games 0-0 points 0-0 serve B [A on the right]"  # B received first in the tiebreak
+
+set a                            # 6-0 for the match
+expect log "match: team A wins 7-6 6-0"
+wait 6
+snap                             # MATCH and the final score

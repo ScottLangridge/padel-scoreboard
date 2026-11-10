@@ -1,82 +1,65 @@
 // Host emulator for the scoreboard firmware: runs the real screen flow
 // (main/padel-scoreboard.cpp, built against the stand-in headers in shims/)
 // with the panel drawn in the terminal and the 433 MHz remotes on the
-// keyboard, so changes can be tried without flashing.
+// keyboard, or driven by a test script. See README.md.
 //
-//   emulator                    live, in the terminal (keys listed on screen)
-//   emulator --script <file>    runs a script of presses on a virtual clock
-//                               and prints the log and snapshots (- = stdin)
-//
-// The remotes are emulated at the rx433 component's interface (rx433.h):
-// Radio below turns button presses into the PRESS / LONG / RELEASE events
-// that rx433 sends, mirroring its press tracking. The radio decoding itself
-// (components/rx433/rx433.c) is not emulated.
-//
-// Script format: one step per line, `#` starts a comment.
-//
-//   <time> tap <remote>             a short press (0.15 s)
-//   <time> hold <remote> <seconds>  a press held that long (>= 1 s: long press)
-//   <time> snap                     print what the panel shows
-//   <time> end                      stop (default: 3 s after the last step)
-//
-// <time> is seconds since power on, or +<seconds> after the previous step.
-// Remotes are a, b (the two to bind) and x (a stranger's). A trailing xN
-// repeats a relative step N times, e.g. `+1.2 tap a x4`.
+// This file is the core: the clock, the FreeRTOS queue and delay the
+// firmware waits in, the remotes and receiver, and the log and panel output.
 
 #include "emulator.h"
 
-#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
-#include <termios.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <fstream>
-#include <functional>
 #include <iostream>
 #include <map>
 #include <mutex>
-#include <sstream>
-#include <string>
 #include <thread>
 #include <vector>
 
 #include "DMD2.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "internal.h"
 #include "rx433.h"
 #include "sdkconfig.h"
 
 extern "C" void app_main(void);
 
+bool g_virtual_clock = false;
+
 namespace {
 
-constexpr int64_t NEVER = INT64_MAX;
 constexpr int64_t TICK_US = 1000000 / CONFIG_FREERTOS_HZ;
-constexpr int PANEL_W = 32, PANEL_H = 16;
 
 // ---------------------------------------------------------------------------
 // Time and scheduled actions
 //
-// Everything the emulator does on its own (remote frames, script steps) is an
+// Everything the emulator does by itself (remote frames, script steps) is an
 // action scheduled for a time. Live, a thread runs each one when real time
-// reaches it. Scripted, there is no second thread: whenever the firmware
-// waits, the clock jumps straight to the next action due before its wait
-// ends, so a whole match runs in moments and always the same way.
+// reaches it. On the virtual clock there is no second thread: whenever the
+// firmware waits, the clock jumps straight to the next action due before its
+// wait ends, so a whole match runs in moments and the same way every time.
 
-bool g_scripted = false;
 std::mutex g_mutex; // guards g_actions, g_virtual_us and every EmuQueue
 std::condition_variable g_wake;
 std::multimap<int64_t, std::function<void()>> g_actions;
 int64_t g_virtual_us = 0;
 const auto g_start = std::chrono::steady_clock::now();
+
+std::function<bool()> g_idle_handler;
+double g_pace = 0; // virtual clock: 0 = as fast as possible, else times real time
+
+void draw_panel_when_due(bool changed);
 
 int64_t real_us()
 {
@@ -86,13 +69,6 @@ int64_t real_us()
 std::chrono::steady_clock::time_point real_time_point(int64_t at_us)
 {
     return g_start + std::chrono::microseconds(at_us);
-}
-
-void schedule(int64_t at_us, std::function<void()> action)
-{
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_actions.emplace(at_us, std::move(action));
-    g_wake.notify_all();
 }
 
 // Live only: the thread that runs actions as they fall due.
@@ -117,21 +93,40 @@ void run_actions_live()
     }
 }
 
-[[noreturn]] void stop_script(const char *why)
+// Virtual clock: moves it forward, in real time too when pacing.
+void move_clock_to(int64_t at_us)
 {
-    printf("--- %s at %.3f s ---\n", why, g_virtual_us / 1e6);
-    fflush(stdout);
-    exit(0);
+    int64_t from_us;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        from_us = g_virtual_us;
+        g_virtual_us = std::max(g_virtual_us, at_us);
+    }
+    if (g_pace > 0 && at_us > from_us) {
+        std::this_thread::sleep_for(std::chrono::microseconds((int64_t)((at_us - from_us) / g_pace)));
+        draw_panel_when_due(false);
+    }
 }
 
-// Scripted only: runs the actions due up to `deadline`, moving the virtual
-// clock to each, and then to the deadline. Returns early, true, as soon as
-// `ready` holds (it is checked with g_mutex held).
+// Virtual clock: runs the actions due up to `deadline`, moving the clock to
+// each, and then to the deadline. Returns early, true, as soon as `ready`
+// holds (checked with g_mutex held).
+//
+// A wait for ever, with nothing ready and the remotes quiet, is the board
+// idling: the idle handler gets a turn first each time round.
 template <class Ready>
 bool advance_until(int64_t deadline, Ready ready)
 {
+    auto is_ready = [&ready]() {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        return ready();
+    };
     while (true) {
+        if (deadline == NEVER && g_idle_handler && !radio_busy() && !is_ready() && g_idle_handler()) {
+            continue;
+        }
         std::function<void()> action;
+        int64_t action_at;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             if (ready()) {
@@ -139,19 +134,21 @@ bool advance_until(int64_t deadline, Ready ready)
             }
             if (g_actions.empty() || g_actions.begin()->first > deadline) {
                 if (deadline == NEVER) {
-                    break;
+                    fprintf(stderr, "emulator: the firmware is waiting for input and nothing is left to happen\n");
+                    exit(1);
                 }
-                g_virtual_us = std::max(g_virtual_us, deadline);
-                return false;
+                break;
             }
             auto next = g_actions.begin();
-            g_virtual_us = std::max(g_virtual_us, next->first);
+            action_at = next->first;
             action = std::move(next->second);
             g_actions.erase(next);
         }
+        move_clock_to(action_at);
         action();
     }
-    stop_script("nothing left to happen");
+    move_clock_to(deadline);
+    return false;
 }
 
 int64_t deadline_after(TickType_t ticks)
@@ -163,99 +160,53 @@ int64_t deadline_after(TickType_t ticks)
 // Output: the log and the panel
 
 std::mutex g_print_mutex;
+LogOutput g_log_output = LogOutput::Stdout;
+std::vector<std::function<void(const std::string &)>> g_log_handlers;
 bool g_panel[PANEL_H][PANEL_W];
-
-class Terminal {
-public:
-    void start()
-    {
-        tcgetattr(STDIN_FILENO, &saved_);
-        termios raw = saved_;
-        raw.c_lflag &= ~(ICANON | ECHO); // keys arrive one at a time, unechoed; Ctrl-C still works
-        tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-        winsize size = {};
-        ioctl(STDOUT_FILENO, TIOCGWINSZ, &size);
-        rows_ = size.ws_row > LOG_TOP ? size.ws_row : 40;
-        // Alternate screen, cursor hidden, the log scrolling under the panel.
-        printf("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[1;1H");
-        printf("padel-scoreboard emulator   a/b: tap remote   A/B: hold remote 1.5 s   x: unknown remote   q: quit");
-        printf("\x1b[%d;1H\x1b[2m--- log ---\x1b[0m", LOG_TOP - 1);
-        printf("\x1b[%d;%dr", LOG_TOP, rows_);
-        fflush(stdout);
-        active_ = true;
-    }
-
-    void stop()
-    {
-        if (!active_) {
-            return;
-        }
-        active_ = false;
-        printf("\x1b[r\x1b[?25h\x1b[?1049l");
-        fflush(stdout);
-        tcsetattr(STDIN_FILENO, TCSANOW, &saved_);
-    }
-
-    void draw_panel()
-    {
-        std::string out = "\x1b[3;1H";
-        for (int y = 0; y < PANEL_H; y++) {
-            out += "  ";
-            for (int x = 0; x < PANEL_W; x++) {
-                out += g_panel[y][x] ? "\x1b[38;5;196m\xe2\x97\x8f " : "\x1b[38;5;237m\xc2\xb7 "; // lit ●, dark ·
-            }
-            out += "\x1b[0m\x1b[K\r\n";
-        }
-        char clock[48];
-        snprintf(clock, sizeof clock, "\x1b[2m  t = %.1f s\x1b[0m\x1b[K", emu_now_us() / 1e6);
-        out += clock;
-        fputs(out.c_str(), stdout);
-        fflush(stdout);
-    }
-
-    void log_line(const char *line)
-    {
-        printf("\x1b[%d;1H\r\n%s", rows_, line); // at the bottom of the scroll region, so the log scrolls up
-        fflush(stdout);
-    }
-
-private:
-    static constexpr int LOG_TOP = 22;
-    termios saved_ = {};
-    int rows_ = 40;
-    bool active_ = false;
-};
-
-Terminal g_terminal;
-
-void print_line(const char *line)
-{
-    std::lock_guard<std::mutex> lock(g_print_mutex);
-    if (g_scripted) {
-        puts(line);
-    } else {
-        g_terminal.log_line(line);
-    }
-}
+FILE *g_frames_file = nullptr;
 
 void log_line(char level, const char *tag, const char *text)
 {
     char line[320];
     snprintf(line, sizeof line, "%c (%lld) %s: %s", level, (long long)(emu_now_us() / 1000), tag, text);
     print_line(line);
+    for (auto &handler : g_log_handlers) {
+        handler(line);
+    }
 }
 
-void print_snapshot()
+// The terminal can't take every frame when a script plays faster than real
+// time, and a screen shows ~60 a second anyway: draw at most that often,
+// always ending on the latest frame.
+bool g_panel_drawn = true;
+int64_t g_last_draw_us = -1000000;
+
+void draw_panel_when_due(bool changed)
 {
-    std::lock_guard<std::mutex> lock(g_print_mutex);
-    printf("snap at %.3f s\n", emu_now_us() / 1e6);
-    for (int y = 0; y < PANEL_H; y++) {
-        char row[PANEL_W + 1] = {};
-        for (int x = 0; x < PANEL_W; x++) {
-            row[x] = g_panel[y][x] ? '#' : '.';
-        }
-        printf("  %s\n", row);
+    if (changed) {
+        g_panel_drawn = false;
     }
+    int64_t now = real_us();
+    if (g_panel_drawn || (g_pace > 0 && now - g_last_draw_us < 16000)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_print_mutex);
+    terminal_draw_panel();
+    g_panel_drawn = true;
+    g_last_draw_us = now;
+}
+
+void write_frame()
+{
+    fprintf(g_frames_file, "%lld ", (long long)emu_now_us());
+    for (int y = 0; y < PANEL_H; y++) {
+        uint32_t row = 0;
+        for (int x = 0; x < PANEL_W; x++) {
+            row = row << 1 | g_panel[y][x];
+        }
+        fprintf(g_frames_file, "%08x", row);
+    }
+    fputc('\n', g_frames_file);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,12 +236,17 @@ public:
         return ESP_OK;
     }
 
-    // Schedules a press of remote `key` ('a', 'b' or 'x') held for hold_us.
-    // Safe from any thread.
     void press(char key, int64_t at_us, int64_t hold_us)
     {
-        schedule(at_us, [this, key, hold_us]() { start_sending(key, hold_us); });
+        presses_due_++;
+        schedule(at_us, [this, key, hold_us]() {
+            presses_due_--;
+            start_sending(key, hold_us);
+        });
     }
+
+    // A press is due or under way, or one hasn't been released yet.
+    bool busy() const { return presses_due_ > 0 || ticking_; }
 
 private:
     static constexpr int64_t FRAME_PERIOD_US = 40000; // one 24-bit frame plus its sync gap
@@ -399,6 +355,7 @@ private:
     rx433_config_t config_ = {};
     bool started_ = false;
     bool ticking_ = false;
+    std::atomic<int> presses_due_{0}; // scheduled, not started (presses come from the key thread too)
 
     std::vector<uint32_t> known_; // codes confirmed before
     bool candidate_valid_ = false;
@@ -413,149 +370,90 @@ private:
 
 Radio g_radio;
 
-constexpr int64_t TAP_US = 150000;
-constexpr int64_t LIVE_HOLD_US = 1500000;
-
-// ---------------------------------------------------------------------------
-// Live mode
-
-void restore_terminal()
-{
-    g_terminal.stop();
-}
-
-void on_signal(int)
-{
-    restore_terminal();
-    _exit(130);
-}
-
-// Keys to presses. Holding a key down also works (its auto-repeat keeps the
-// remote sending), if the terminal's repeat delay is under about half a
-// second.
-void read_keys()
-{
-    while (true) {
-        char key;
-        if (read(STDIN_FILENO, &key, 1) != 1 || key == 'q') {
-            restore_terminal();
-            _exit(0);
-        }
-        switch (key) {
-        case 'a':
-        case 'b':
-        case 'x':
-            g_radio.press(key, emu_now_us(), TAP_US);
-            break;
-        case 'A':
-        case 'B':
-            g_radio.press(key - 'A' + 'a', emu_now_us(), LIVE_HOLD_US);
-            break;
-        }
-    }
-}
-
-void start_live()
-{
-    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
-        fprintf(stderr, "emulator: live mode needs a terminal; use --script <file> otherwise\n");
-        exit(2);
-    }
-    g_terminal.start();
-    atexit(restore_terminal);
-    signal(SIGINT, on_signal);
-    signal(SIGTERM, on_signal);
-    g_terminal.draw_panel();
-    std::thread(run_actions_live).detach();
-    std::thread(read_keys).detach();
-}
-
-// ---------------------------------------------------------------------------
-// Scripted mode
-
-[[noreturn]] void script_error(int line_number, const std::string &line, const char *problem)
-{
-    fprintf(stderr, "emulator: script line %d: %s\n    %s\n", line_number, problem, line.c_str());
-    exit(2);
-}
-
-int64_t seconds_to_us(double seconds)
-{
-    return (int64_t)(seconds * 1e6 + 0.5);
-}
-
-void load_script(std::istream &in)
-{
-    int64_t previous_us = 0, last_us = 0;
-    bool ends = false;
-    std::string line;
-    for (int line_number = 1; std::getline(in, line); line_number++) {
-        std::string text = line.substr(0, line.find('#'));
-        std::istringstream words(text);
-        std::string time_word, command;
-        if (!(words >> time_word)) {
-            continue; // blank or comment
-        }
-        if (!(words >> command)) {
-            script_error(line_number, line, "expected a command after the time");
-        }
-        bool relative = time_word[0] == '+';
-        char *rest = nullptr;
-        double seconds = strtod(time_word.c_str() + (relative ? 1 : 0), &rest);
-        if (*rest || seconds < 0) {
-            script_error(line_number, line, "bad time");
-        }
-
-        std::vector<std::string> args;
-        int repeat = 1;
-        for (std::string word; words >> word;) {
-            if (word.size() > 1 && word[0] == 'x' && isdigit((unsigned char)word[1])) {
-                repeat = atoi(word.c_str() + 1);
-            } else {
-                args.push_back(word);
-            }
-        }
-        if (repeat > 1 && !relative) {
-            script_error(line_number, line, "xN needs a relative (+) time");
-        }
-
-        for (int i = 0; i < repeat; i++) {
-            int64_t at_us = relative ? previous_us + seconds_to_us(seconds) : seconds_to_us(seconds);
-            if (at_us < previous_us) {
-                script_error(line_number, line, "goes back in time");
-            }
-            previous_us = last_us = at_us;
-            if (command == "tap" || command == "hold") {
-                bool hold = command == "hold";
-                if (args.size() != (hold ? 2u : 1u) || args[0].size() != 1 || !strchr("abx", args[0][0])) {
-                    script_error(line_number, line, hold ? "usage: hold <a|b|x> <seconds>" : "usage: tap <a|b|x>");
-                }
-                int64_t hold_us = hold ? seconds_to_us(atof(args[1].c_str())) : TAP_US;
-                g_radio.press(args[0][0], at_us, hold_us);
-                last_us = at_us + hold_us;
-            } else if (command == "snap") {
-                schedule(at_us, print_snapshot);
-            } else if (command == "end") {
-                schedule(at_us, []() { stop_script("end"); });
-                ends = true;
-            } else {
-                script_error(line_number, line, "unknown command (tap, hold, snap, end)");
-            }
-        }
-    }
-    if (!ends) {
-        schedule(last_us + 3000000, []() { stop_script("end"); });
-    }
-}
-
 } // namespace
 
 // ---------------------------------------------------------------------------
-// What the shims call
+// internal.h
+
+void schedule(int64_t at_us, std::function<void()> action)
+{
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_actions.emplace(at_us, std::move(action));
+    g_wake.notify_all();
+}
+
+void on_idle(std::function<bool()> handler)
+{
+    g_idle_handler = std::move(handler);
+}
+
+void pace_virtual_clock(double speed)
+{
+    g_pace = speed;
+}
+
+void on_log(std::function<void(const std::string &)> handler)
+{
+    g_log_handlers.push_back(std::move(handler));
+}
+
+void set_log_output(LogOutput output)
+{
+    g_log_output = output;
+}
+
+bool record_frames(const char *path)
+{
+    g_frames_file = fopen(path, "w");
+    return g_frames_file != nullptr;
+}
+
+bool panel_pixel(int x, int y)
+{
+    return x >= 0 && x < PANEL_W && y >= 0 && y < PANEL_H && g_panel[y][x];
+}
+
+void print_line(const char *line)
+{
+    std::lock_guard<std::mutex> lock(g_print_mutex);
+    switch (g_log_output) {
+    case LogOutput::Stdout:
+        puts(line);
+        break;
+    case LogOutput::Terminal:
+        terminal_log(line);
+        break;
+    case LogOutput::None:
+        break;
+    }
+}
+
+void print_output(const char *line)
+{
+    if (g_log_output == LogOutput::None) {
+        std::lock_guard<std::mutex> lock(g_print_mutex);
+        puts(line);
+    } else {
+        print_line(line);
+    }
+}
+
+void press_remote(char key, int64_t at_us, int64_t hold_us)
+{
+    g_radio.press(key, at_us, hold_us);
+}
+
+bool radio_busy()
+{
+    return g_radio.busy();
+}
+
+// ---------------------------------------------------------------------------
+// emulator.h: what the shims call
 
 int64_t emu_now_us()
 {
-    if (g_scripted) {
+    if (g_virtual_clock) {
         std::lock_guard<std::mutex> lock(g_mutex);
         return g_virtual_us;
     }
@@ -569,9 +467,11 @@ void emu_show_panel(const DMDFrame &panel)
             g_panel[y][x] = panel.getPixel(x, y);
         }
     }
-    if (!g_scripted) {
-        std::lock_guard<std::mutex> lock(g_print_mutex);
-        g_terminal.draw_panel();
+    if (g_frames_file) {
+        write_frame();
+    }
+    if (g_log_output == LogOutput::Terminal) {
+        draw_panel_when_due(true);
     }
 }
 
@@ -623,7 +523,7 @@ BaseType_t xQueueReceive(QueueHandle_t queue, void *buffer, TickType_t ticks_to_
 {
     int64_t deadline = deadline_after(ticks_to_wait);
     auto ready = [queue]() { return !queue->items.empty(); };
-    if (g_scripted) {
+    if (g_virtual_clock) {
         if (!advance_until(deadline, ready)) {
             return pdFALSE;
         }
@@ -644,7 +544,7 @@ BaseType_t xQueueReceive(QueueHandle_t queue, void *buffer, TickType_t ticks_to_
 void vTaskDelay(TickType_t ticks)
 {
     int64_t deadline = deadline_after(ticks);
-    if (g_scripted) {
+    if (g_virtual_clock) {
         advance_until(deadline, []() { return false; });
     } else if (deadline == NEVER) {
         while (true) {
@@ -657,26 +557,93 @@ void vTaskDelay(TickType_t ticks)
 
 // ---------------------------------------------------------------------------
 
+namespace {
+
+const char *const USAGE = "usage: emulator                          play live in the terminal\n"
+                          "       emulator --script <file> [options]  run a test script (- = stdin)\n"
+                          "options:\n"
+                          "  --quiet          print only the script's own output, not the log\n"
+                          "  --frames <file>  write every frame shown, with its time\n"
+                          "  --watch          show it in the terminal as it plays\n"
+                          "  --speed <n>      with --watch: n times real time (default 1)\n";
+
+[[noreturn]] void usage_error()
+{
+    fputs(USAGE, stderr);
+    exit(2);
+}
+
+void start_live()
+{
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+        fprintf(stderr, "emulator: live mode needs a terminal; use --script <file> otherwise\n");
+        exit(2);
+    }
+    terminal_start("a/b: tap remote   A/B: hold remote 1.5 s   x: unknown remote   q: quit");
+    set_log_output(LogOutput::Terminal);
+    std::thread(run_actions_live).detach();
+    std::thread([]() { read_keys(true); }).detach();
+}
+
+} // namespace
+
 int main(int argc, char **argv)
 {
-    if (argc == 3 && strcmp(argv[1], "--script") == 0) {
-        g_scripted = true;
-        if (strcmp(argv[2], "-") == 0) {
-            load_script(std::cin);
+    const char *script = nullptr, *frames = nullptr;
+    bool quiet = false, watch = false;
+    double speed = 1;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        bool has_value = i + 1 < argc;
+        if (arg == "--script" && has_value) {
+            script = argv[++i];
+        } else if (arg == "--frames" && has_value) {
+            frames = argv[++i];
+        } else if (arg == "--speed" && has_value) {
+            speed = atof(argv[++i]);
+        } else if (arg == "--quiet") {
+            quiet = true;
+        } else if (arg == "--watch") {
+            watch = true;
         } else {
-            std::ifstream file(argv[2]);
-            if (!file) {
-                fprintf(stderr, "emulator: can't open %s\n", argv[2]);
-                return 2;
-            }
-            load_script(file);
+            usage_error();
         }
-    } else if (argc == 1) {
+    }
+
+    if (!script) {
+        if (argc > 1) {
+            usage_error();
+        }
         start_live();
-    } else {
-        fprintf(stderr, "usage: emulator [--script <file>]\n");
+        app_main(); // never returns: q exits
+    }
+
+    g_virtual_clock = true;
+    if (frames && !record_frames(frames)) {
+        fprintf(stderr, "emulator: can't write %s\n", frames);
         return 2;
     }
-    app_main(); // never returns: the script's end, or q, exits
+    if (watch) {
+        if (speed <= 0) {
+            usage_error();
+        }
+        terminal_start("watching a script   q: quit");
+        set_log_output(LogOutput::Terminal);
+        pace_virtual_clock(speed);
+        std::thread([]() { read_keys(false); }).detach();
+    } else if (quiet) {
+        set_log_output(LogOutput::None);
+    }
+    if (strcmp(script, "-") == 0) {
+        load_script(std::cin, watch);
+    } else {
+        std::ifstream file(script);
+        if (!file) {
+            fprintf(stderr, "emulator: can't open %s\n", script);
+            return 2;
+        }
+        load_script(file, watch);
+    }
+    app_main(); // never returns: the script exits when it is done
     return 0;
 }

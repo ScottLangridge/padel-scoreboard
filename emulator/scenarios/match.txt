@@ -1,35 +1,72 @@
-# A whole match on the emulator: team A (remote a) beats team B 6-0 6-0.
+# A whole match, from power on: team A (remote a) beats team B 6-0 6-0.
 # Along the way: the splash is skipped, a stranger's remote is ignored, a
-# golden point, an undo by long press, and the change of ends after set 1.
-#
-#   emulator/emulator --script emulator/scenarios/match.txt
+# long press undoes a point, the ends change after set 1, and a golden point.
 
-1.0  tap a        # skips the splash; doesn't bind anything
-+0.5 snap         # PRESS / LEFT
-+1.5 tap a        # remote a is the left team, A
-+1.5 tap b        # remote b is the right team, B
-+1.0 snap         # SELECT / SERVE
-+2.5 tap a        # team A serves first
-+2.0 snap         # the fresh board, 0-0
-+1.0 tap x        # a stranger's remote: ignored
+# Power on to the first point, step by step (`start` does all of this).
+tap a                            # any press skips the splash...
+wait log "bind: press the left remote"
+expect log "splash skipped"      # ...and doesn't bind anything
+wait 1
+snap                             # PRESS / LEFT
+tap a
+wait log "press the right remote"
+wait 0.7
+tap b
+wait log "select serve"
+expect log "remote 0x005a5a51 is left (team A)"
+expect log "remote 0x005a5a52 is right (team B)"
+wait 1
+tap a
+wait idle
+expect score "sets 0-0 games 0-0 points 0-0 serve A"
+expect board                     # the fresh board: 0 0, games 0 0, A's serve triangle
+  .........###........###.........
+  ........#...#......#...#........
+  ........#..##......#..##........
+  ........#.#.#.####.#.#.#........
+  ........##..#......##..#........
+  ........#...#......#...#........
+  .........###........###.........
+  ................................
+  ################################
+  ..#..........................#..
+  ..#...###..............###...#..
+  ..#...#.#....#.........#.#...#..
+  ..#...#.#....##........#.#...#..
+  ..#...#.#....###.......#.#...#..
+  ..#...###....####......###...#..
+  ..#..........................#..
 
-# Set 1, 6-0, with an undo in the first game.
-+1.2 tap a x2     # 30-0
-+1.2 tap b        # 30-15
-+2.0 hold b 1.5   # long press: undo it, back to 30-0
-+3.0 snap
-+1.2 tap a x22    # the rest of the set (the last point wins it)
+point x                          # a stranger's remote
+expect log "unknown, ignored"
+expect score "points 0-0"
 
-# Change ends: the board folds away until a remote acknowledges it.
-+5.0 snap         # SWAP / ENDS
-+0.5 tap b
-+2.0 snap         # A is now on the right
+# Set 1, with an undo in the first game.
+point a x2
+point b
+expect score "points 2-1"
+undo b                           # either remote's long press undoes the last point
+expect log "undo"
+expect score "points 2-0"
+game a                           # finishes that game
+expect score "games 1-0 points 0-0 serve B"
+game a x5                        # the set: 6-0
+expect log "swap ends"
+snap                             # SWAP / ENDS
 
-# Set 2: a golden point first, then the rest.
-+1.2 tap a x3     # 40-0
-+1.2 tap b x3     # 40-40
-+2.0 snap         # GOLDEN
-+1.2 tap a        # the golden point wins the game
-+1.2 tap a x20    # the rest of the match
+swap
+expect score "sets 1-0 games 0-0 points 0-0 serve A [A on the right]"
+expect pixel 31 12 on            # A's set is now tallied on the right
+expect pixel 0 12 off
 
-+8.0 snap         # MATCH and the final score
+# Set 2: a golden point first.
+point a x3
+point b x3
+expect score "points 3-3"
+snap                             # GOLDEN
+point b                          # the golden point decides the game
+expect score "games 0-1 points 0-0"
+set a
+expect log "match: team A wins 6-0 6-1"
+wait 6
+snap                             # MATCH and the final score
