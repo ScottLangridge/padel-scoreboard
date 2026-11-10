@@ -32,9 +32,14 @@ def ascii(frame_hex, on="#", off="."):
     return [row.replace("1", on).replace("0", off) for row in rows(frame_hex)]
 
 
+def diff_mark(want_bit, got_bit):
+    if want_bit == got_bit:
+        return "."
+    return "-" if want_bit == "1" else "+"  # - missing, + extra
+
+
 def diff(want_hex, got_hex):
-    return ["".join("-" if want_bit == "1" and got_bit == "0" else "+" if want_bit == "0" and got_bit == "1" else "."
-                    for want_bit, got_bit in zip(want_row, got_row))
+    return ["".join(diff_mark(want_bit, got_bit) for want_bit, got_bit in zip(want_row, got_row))
             for want_row, got_row in zip(rows(want_hex), rows(got_hex))]
 
 
