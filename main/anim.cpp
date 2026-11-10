@@ -3,6 +3,7 @@
 #include "fonts.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,14 @@ enum Face { FACE_5X7, FACE_3X5, FACE_4X7 }; // 5x7, 3x5, 4x7 condensed
 
 static const Font &fontFor(Face face)
 {
-    return face == FACE_5X7 ? FONT_5X7 : face == FACE_3X5 ? FONT_3X5 : FONT_4X7;
+    switch (face) {
+    case FACE_5X7:
+        return FONT_5X7;
+    case FACE_3X5:
+        return FONT_3X5;
+    default:
+        return FONT_4X7;
+    }
 }
 
 static void text5x7(Canvas &canvas, const char *str, int x, int y, bool on = true)
@@ -594,7 +602,8 @@ void animSet(Canvas &canvas, double t, const Board &from, const Board &to, int w
     if (t >= 2.6 && t < 3.4 && ((int)floor((t - 2.6) / 0.13)) % 2) { // the new block blinks
         int setIndex = to.sets[winner] - 1;
         int x0 = winner ? 29 : 0;
-        for (int y = setIndex ? 8 : 12; y < (setIndex ? 12 : 16); y++) {
+        int bottom = setIndex ? 12 : 16;
+        for (int y = bottom - 4; y < bottom; y++) {
             for (int x = x0; x < x0 + 3; x++) {
                 canvas.set(x, y, false);
             }
@@ -800,7 +809,7 @@ void bindWipeIn(Canvas &canvas, double t)
 {
     int h = jsround(ease(t < BIND_WIPE_IN_S ? t / BIND_WIPE_IN_S : 1) * 8);
     for (int y = 0; y < 16; y++) {
-        if (y != 8 && (y > 8 ? y - 8 : 8 - y) > h) {
+        if (y != 8 && abs(y - 8) > h) {
             canvas.rows[y] = 0;
         }
     }

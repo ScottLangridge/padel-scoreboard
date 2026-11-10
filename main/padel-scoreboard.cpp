@@ -141,7 +141,10 @@ static void play(Render render, double seconds)
 // the team on the right (menuconfig flips it for the other mounting).
 static int serve_box(int serving_side, int played)
 {
-    int box = (played % 2) ^ (serving_side == 0 ? 1 : 0);
+    int box = played % 2;
+    if (serving_side == 0) {
+        box ^= 1;
+    }
 #if CONFIG_SCOREBOARD_FLIP_SERVE_BOXES
     box ^= 1;
 #endif
@@ -279,8 +282,9 @@ static void swap_ends(const Board &from, const Board &to)
     char final_score[16] = ""; // each set's games, winner's first
     int winner = score.winner;
     for (int i = 0; i < score.sets[0] + score.sets[1]; i++) {
-        snprintf(final_score + strlen(final_score), sizeof final_score - strlen(final_score), "%s%d-%d", i ? " " : "",
-                 score.set_games[i][winner], score.set_games[i][1 - winner]);
+        size_t used = strlen(final_score);
+        snprintf(final_score + used, sizeof final_score - used, "%s%d-%d", i ? " " : "", score.set_games[i][winner],
+                 score.set_games[i][1 - winner]);
     }
     ESP_LOGI(TAG, "match: team %c wins %s", 'A' + winner, final_score);
     Clock clk;

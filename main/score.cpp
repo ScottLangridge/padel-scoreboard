@@ -25,7 +25,12 @@ void Match::point(int team)
         }
         // Point `played` (0-based) is served by tiebreak_first_server when it is 0, 3, 4, 7, 8...
         int played = score_.points[0] + score_.points[1];
-        score_.server = ((played + 1) / 2) % 2 ? 1 - score_.tiebreak_first_server : score_.tiebreak_first_server;
+        bool first_server_serves = ((played + 1) / 2) % 2 == 0;
+        if (first_server_serves) {
+            score_.server = score_.tiebreak_first_server;
+        } else {
+            score_.server = 1 - score_.tiebreak_first_server;
+        }
         return;
     }
 

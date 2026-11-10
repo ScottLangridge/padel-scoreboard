@@ -64,7 +64,8 @@ static bool IRAM_ATTR on_recv(rmt_channel_handle_t channel, const rmt_rx_done_ev
     BaseType_t task_woken = pdFALSE;
     // Only ever write whole symbols, so a full buffer drops data but never
     // misaligns the stream.
-    size_t room = xStreamBufferSpacesAvailable(s_stream) & ~(sizeof(rmt_symbol_word_t) - 1);
+    size_t room = xStreamBufferSpacesAvailable(s_stream);
+    room -= room % sizeof(rmt_symbol_word_t);
     size_t len = event_data->num_symbols * sizeof(rmt_symbol_word_t);
     if (event_data->flags.is_last && room >= sizeof(rmt_symbol_word_t)) {
         room -= sizeof(rmt_symbol_word_t); // keep space for the gap marker
@@ -410,7 +411,7 @@ static void pressed(const seen_t *seen, uint16_t pulse_us, TickType_t now)
 static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
 {
     TickType_t now = xTaskGetTickCount();
-    bool full = FULL_BITS ? bits == FULL_BITS : true;
+    bool full = FULL_BITS == 0 || bits == FULL_BITS; // 0: any length is full
     bool recent = s_candidate.valid && now - s_candidate.last_seen <= pdMS_TO_TICKS(CONFIRM_MS);
 
     if (full) {
