@@ -53,12 +53,12 @@ static Hub12 panel;
 static DMDFrame back_buffer(32, 16); // drawn here, then copied, so a scan never sees a half-drawn frame
 static Canvas canvas;
 static Match match;
-static QueueHandle_t s_events;
+static QueueHandle_t event_queue;
 static uint32_t codes[2]; // remote code of team 0 (bound as left) and team 1
 
 static void on_rx(const rx433_event_t *ev, void *)
 {
-    xQueueSend(s_events, ev, 0);
+    xQueueSend(event_queue, ev, 0);
 }
 
 static int team_of(uint32_t code)
@@ -118,7 +118,7 @@ static void run(const Clock &clk, Render render, OnEvent on_event, bool events, 
                 break;
             }
             rx433_event_t ev;
-            if (xQueueReceive(s_events, &ev, ticks)) {
+            if (xQueueReceive(event_queue, &ev, ticks)) {
                 on_event(clk.now(), ev);
             }
         }
@@ -346,7 +346,7 @@ extern "C" void app_main(void)
 
     panel.start();
 
-    s_events = xQueueCreate(16, sizeof(rx433_event_t));
+    event_queue = xQueueCreate(16, sizeof(rx433_event_t));
     rx433_config_t cfg = {};
     cfg.gpio = CONFIG_RX433_GPIO;
     cfg.callback = on_rx;
@@ -365,7 +365,7 @@ extern "C" void app_main(void)
 
     while (true) {
         rx433_event_t ev;
-        xQueueReceive(s_events, &ev, portMAX_DELAY);
+        xQueueReceive(event_queue, &ev, portMAX_DELAY);
         int team = team_of(ev.code);
 
         switch (ev.type) {

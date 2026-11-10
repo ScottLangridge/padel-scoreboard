@@ -43,6 +43,7 @@ static const char *TAG = "rx433";
 
 /* ---------- state ---------- */
 
+// s_ marks file-scope variables (the ESP-IDF convention).
 static rmt_channel_handle_t s_channel;
 static StreamBufferHandle_t s_stream;
 static rmt_symbol_word_t s_chunk[CHUNK_SYMBOLS];
