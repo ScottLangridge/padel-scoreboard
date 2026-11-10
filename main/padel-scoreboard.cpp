@@ -51,7 +51,6 @@ static const double NOT_PRESSED = INFINITY;                // "no press yet" for
 
 static Hub12 panel;
 static DMDFrame back_buffer(32, 16); // drawn here, then copied, so a scan never sees a half-drawn frame
-static Canvas canvas;
 static Match match;
 static QueueHandle_t s_events;
 static uint32_t codes[2]; // remote code of team 0 (bound as left) and team 1
@@ -93,6 +92,7 @@ struct Clock {
 template <class Render, class OnEvent, class Done>
 static void run(const Clock &clk, Render render, OnEvent on_event, bool events, Done done)
 {
+    Canvas canvas;
     int64_t next = esp_timer_get_time();
     while (true) {
         double t = clk.now();
@@ -172,7 +172,7 @@ static void show_board()
     ESP_LOGI(TAG, "sets %u-%u games %u-%u points %u-%u%s serve %c%s", score.sets[0], score.sets[1], score.games[0],
              score.games[1], score.points[0], score.points[1], score.tiebreak ? " (tiebreak)" : "", 'A' + score.server,
              score.endsSwapped() ? " [A on the right]" : "");
-    canvas.clear();
+    Canvas canvas;
     drawBoard(canvas, board_of(score, score.endsSwapped()));
     show_canvas(canvas);
 }

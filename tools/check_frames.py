@@ -28,7 +28,7 @@ def rows(frame_hex):
     return [format(int(frame_hex[y * 8:(y + 1) * 8], 16), "032b") for y in range(16)]
 
 
-def ascii(frame_hex, on="#", off="."):
+def ascii_rows(frame_hex, on="#", off="."):
     return [row.replace("1", on).replace("0", off) for row in rows(frame_hex)]
 
 
@@ -53,7 +53,7 @@ def check(renderer, frames_dir, clip):
     print(f"FAIL {clip:8s} first difference at frame {first_bad} (t = {first_bad / FPS:.3f} s), "
           f"{sum(want[i] != got[i] for i in range(compared))} of {compared} frames differ")
     print(f"       {'reference':32s}  {'port':32s}  {'diff (- missing, + extra)'}")
-    for want_row, got_row, diff_row in zip(ascii(want[first_bad]), ascii(got[first_bad]), diff(want[first_bad], got[first_bad])):
+    for want_row, got_row, diff_row in zip(ascii_rows(want[first_bad]), ascii_rows(got[first_bad]), diff(want[first_bad], got[first_bad])):
         print(f"       {want_row}  {got_row}  {diff_row}")
     return False
 
