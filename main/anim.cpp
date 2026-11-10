@@ -45,10 +45,10 @@ static double easeBetween(double t, double start, double end)
 // ---------------------------------------------------------------------------
 // Fonts
 
-static void drawText(Canvas &canvas, const Font &font, const char *str, int x, int y, bool on = true)
+static void drawText(Canvas &canvas, const Font &font, const char *text, int x, int y, bool on = true)
 {
-    for (; *str; str++, x += font.advance) {
-        unsigned code = (unsigned char)*str;
+    for (; *text; text++, x += font.advance) {
+        unsigned code = (unsigned char)*text;
         const uint8_t *glyph = font.glyphs[code >= 32 && code < 128 ? code - 32 : 0];
         for (int i_row = 0; i_row < font.height; i_row++) {
             for (int i_col = 0; i_col < font.width; i_col++) {
@@ -67,22 +67,22 @@ static const Font &fontFor(Face face)
     return face == FACE_5X7 ? FONT_5X7 : face == FACE_3X5 ? FONT_3X5 : FONT_4X7;
 }
 
-static void text5x7(Canvas &canvas, const char *str, int x, int y, bool on = true)
+static void text5x7(Canvas &canvas, const char *text, int x, int y, bool on = true)
 {
-    drawText(canvas, FONT_5X7, str, x, y, on);
+    drawText(canvas, FONT_5X7, text, x, y, on);
 }
-static void text3x5(Canvas &canvas, const char *str, int x, int y, bool on = true)
+static void text3x5(Canvas &canvas, const char *text, int x, int y, bool on = true)
 {
-    drawText(canvas, FONT_3X5, str, x, y, on);
+    drawText(canvas, FONT_3X5, text, x, y, on);
 }
-static void text4x7(Canvas &canvas, const char *str, int x, int y, bool on = true)
+static void text4x7(Canvas &canvas, const char *text, int x, int y, bool on = true)
 {
-    drawText(canvas, FONT_4X7, str, x, y, on);
+    drawText(canvas, FONT_4X7, text, x, y, on);
 }
 
-static int textWidth(const char *str) // 5x7, including the trailing gap
+static int textWidth(const char *text) // 5x7, including the trailing gap
 {
-    return (int)strlen(str) * 6;
+    return (int)strlen(text) * 6;
 }
 
 // Centring: x = round((32 - (width - 1)) / 2)
@@ -115,9 +115,9 @@ static const char *ptsText(const Board &board, int side, char buf[4])
     return PTS_LABELS[board.pts[side] & 3];
 }
 
-static int leftPointsX(const char *str) // right-align the left number against POINTS_LEFT_END_X
+static int leftPointsX(const char *text) // right-align the left number against POINTS_LEFT_END_X
 {
-    return POINTS_LEFT_END_X - (textWidth(str) - 1);
+    return POINTS_LEFT_END_X - (textWidth(text) - 1);
 }
 
 static void netLine(Canvas &canvas)
@@ -492,7 +492,7 @@ void animUndo(Canvas &canvas, double t, const Board &from, const Board &to)
     for (int side = 0; side < 2; side++) {
         char oldBuf[4], newBuf[4];
         const char *oldText = ptsText(from, side, oldBuf), *newText = ptsText(to, side, newBuf);
-        auto xForText = [side, tug](const char *str) { return (side ? POINTS_RIGHT_X : leftPointsX(str)) + tug; };
+        auto xForText = [side, tug](const char *text) { return (side ? POINTS_RIGHT_X : leftPointsX(text)) + tug; };
         if (strcmp(oldText, newText) == 0) {
             text5x7(canvas, oldText, xForText(oldText), POINTS_Y);
         } else {
