@@ -238,6 +238,8 @@ static void log_segment(const char *what, const segment_t *seg, int from, uint32
 #endif
 }
 
+// Decodes the capture buffered since the last gap and hands each code found
+// to press tracking (frame_seen()).
 static void frame_decode(void)
 {
     const int max_bits = CONFIG_RX433_BITS ? CONFIG_RX433_BITS : MAX_BITS;
@@ -385,9 +387,10 @@ static bool is_known(uint32_t code, uint8_t bits)
     return false;
 }
 
-// A confirmed frame of `seen`: starts a press if it is a new code (releasing
-// any other held code first), keeps it alive, sends LONG once it is due, and
-// remembers the code.
+// A confirmed frame of `seen`'s code, which may emit events: RELEASE of a
+// different held code, PRESS if this starts a press, LONG once it has been
+// held long_press_ms. Also keeps the press alive and remembers the code as
+// known.
 static void track_press(const seen_t *seen, uint16_t pulse_us, TickType_t now)
 {
     if (s_held.valid && (s_held.code != seen->code || s_held.bits != seen->bits)) {
@@ -412,6 +415,9 @@ static void track_press(const seen_t *seen, uint16_t pulse_us, TickType_t now)
     remember(&s_held);
 }
 
+// One decoded frame: identifies it (full, or clipped and matched to a code
+// it is part of), applies the confirmation rules above, and passes confirmed
+// frames to track_press().
 static void frame_seen(uint32_t code, uint8_t bits, uint16_t pulse_us)
 {
     TickType_t now = xTaskGetTickCount();
